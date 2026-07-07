@@ -173,11 +173,16 @@
     hr.append(el('th', { class: 'rowhead' }, '#'));
     table.columns.forEach((col, ci) => {
       const roleLabel = table.type === 'xy' ? (col.role === 'x' ? 'X' : 'Y' + ci) : table.type === 'survival' ? col.role : '';
-      const nameInput = el('input', { class: 'colname', value: col.name, oninput: (e) => { col.name = e.target.value; saveState(); } });
+      const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column',
+        oninput: (e) => { col.name = e.target.value; saveState(); },
+        ondblclick: (e) => e.target.select() });
       const colhead = el('div', { class: 'colhead' }, nameInput);
       if (roleLabel) colhead.append(el('div', { class: 'colrole' }, roleLabel));
       const th = el('th', {}, colhead);
-      th.addEventListener('dblclick', () => { if (table.columns.length > 1 && confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); renderContent(); saveState(); } });
+      if (table.columns.length > 1) {
+        th.append(el('button', { class: 'coldel', title: 'Delete this column', tabindex: '-1',
+          onclick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); renderContent(); saveState(); } } }, '×'));
+      }
       hr.append(th);
     });
     thead.append(hr); return thead;
@@ -190,8 +195,13 @@
     hr1.append(el('th', { rowspan: 2, class: 'rowtitle-head' }, el('div', { class: 'colrole', style: 'padding:6px 8px' }, 'Row factor')));
     table.groupNames.forEach((gn, gi) => {
       const th = el('th', { colspan: n, style: 'text-align:center' },
-        el('input', { class: 'colname', value: gn, oninput: (e) => { table.groupNames[gi] = e.target.value; saveState(); } }));
-      th.addEventListener('dblclick', () => { if (g > 2 && confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } });
+        el('input', { class: 'colname', value: gn, title: 'Click to rename this group',
+          oninput: (e) => { table.groupNames[gi] = e.target.value; saveState(); },
+          ondblclick: (e) => e.target.select() }));
+      if (g > 2) {
+        th.append(el('button', { class: 'coldel', title: 'Delete this group', tabindex: '-1',
+          onclick: () => { if (confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } } }, '×'));
+      }
       hr1.append(th);
     });
     thead.append(hr1);
@@ -1204,11 +1214,30 @@
     const ids = App.tables.concat(App.results, App.graphs).map((x) => x.id);
     App.active = s.active && ids.includes(s.active.id) ? s.active : (App.tables[0] ? { view: 'data', id: App.tables[0].id } : null);
   }
-  function loadState() {
-    let raw; try { raw = localStorage.getItem('statlab_state'); } catch (e) { return false; }
-    if (!raw) return false;
-    try { const s = JSON.parse(raw); if (!s.tables || !s.tables.length) return false; restoreSnapshot(s); return true; }
-    catch (e) { return false; }
+  // Read the autosaved session WITHOUT loading it, so startup can offer a choice.
+  function peekSavedState() {
+    let raw; try { raw = localStorage.getItem('statlab_state'); } catch (e) { return null; }
+    if (!raw) return null;
+    try {
+      const s = JSON.parse(raw);
+      if (!s.tables || !s.tables.length) return null;
+      return { state: s, tables: s.tables.length, results: (s.results || []).length, graphs: (s.graphs || []).length };
+    } catch (e) { return null; }
+  }
+  // Startup prompt: restore the previous autosaved session, or begin with a clean workspace.
+  // "Start fresh" leaves the autosave untouched — it is overwritten only once new work is saved —
+  // so choosing it can never destroy the previous session by accident.
+  function showRestorePrompt(info) {
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const parts = [plural(info.tables, 'data table')];
+    if (info.graphs) parts.push(plural(info.graphs, 'graph'));
+    if (info.results) parts.push(plural(info.results, 'result'));
+    const summary = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0];
+    $('#restore-summary').textContent = 'Your last session has ' + summary + '.';
+    const modal = $('#modal-restore');
+    $('#restore-yes').onclick = () => { restoreSnapshot(info.state); renderNavigator(); renderContent(); modal.hidden = true; };
+    $('#restore-fresh').onclick = () => { modal.hidden = true; toast('Started fresh — your previous session is still saved'); };
+    modal.hidden = false;
   }
   function saveProject() { download('statlab_project.json', JSON.stringify(snapshot()), 'application/json'); toast('Project file saved'); }
   function openProjectFile() {
@@ -1244,8 +1273,9 @@
     $$('[data-close]').forEach((b) => b.addEventListener('click', (e) => { const m = e.target.closest('.modal-backdrop'); if (m) m.hidden = true; }));
     $$('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; }));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $$('.modal-backdrop').forEach((m) => m.hidden = true); });
-    loadState();
+    const saved = peekSavedState();
     renderNavigator(); renderContent();
+    if (saved) showRestorePrompt(saved);
   }
 
   function showExampleMenu() {
