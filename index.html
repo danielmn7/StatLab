@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; font-src 'self'" />
+  <title>StatLab — Scientific Statistics &amp; Figures</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="3" y="16" width="5" height="13" rx="1"></rect>
+        <rect x="11" y="9" width="5" height="20" rx="1"></rect>
+        <rect x="19" y="13" width="5" height="16" rx="1"></rect>
+        <path d="M4 11 L13 6 L21 9 L29 3" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+        <circle cx="29" cy="3" r="2.3"></circle>
+      </svg>
+      <div>
+        <div class="brand-name">StatLab</div>
+        <div class="brand-sub">Scientific statistics &amp; figures</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="btn-new" class="btn">＋ New table</button>
+      <button id="btn-import" class="btn">⇪ Import data</button>
+      <button id="btn-example" class="btn">★ Load example</button>
+      <button id="btn-save" class="btn" title="Download a project file">💾 Save</button>
+      <button id="btn-open" class="btn" title="Open a saved project file">📂 Open</button>
+      <span class="toolbar-spacer"></span>
+      <button id="btn-guide" class="btn btn-accent">？ Which test should I use?</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="navigator" id="navigator">
+      <div class="nav-section">
+        <div class="nav-head">Data tables</div>
+        <ul id="nav-tables" class="nav-list"></ul>
+      </div>
+      <div class="nav-section">
+        <div class="nav-head">Results</div>
+        <ul id="nav-results" class="nav-list"></ul>
+      </div>
+      <div class="nav-section">
+        <div class="nav-head">Graphs</div>
+        <ul id="nav-graphs" class="nav-list"></ul>
+      </div>
+    </nav>
+
+    <main class="content" id="content">
+      <!-- views injected here -->
+    </main>
+  </div>
+
+  <!-- Modal: Import -->
+  <div class="modal-backdrop" id="modal-import" hidden>
+    <div class="modal">
+      <div class="modal-head"><h2>Import data</h2><button class="modal-x" data-close>×</button></div>
+      <div class="modal-body">
+        <p class="muted">Paste data copied from Excel, Google Sheets, or a CSV file. The first row can be column names.</p>
+        <textarea id="import-text" rows="10" placeholder="Paste here…  (tab- or comma-separated)"></textarea>
+        <label class="check"><input type="checkbox" id="import-header" checked /> First row contains column names</label>
+        <div class="seg" id="import-type">
+          <button data-type="column" class="seg-btn active">Column data (groups)</button>
+          <button data-type="grouped" class="seg-btn">Grouped (two-way)</button>
+          <button data-type="xy" class="seg-btn">XY (correlation/regression)</button>
+          <button data-type="survival" class="seg-btn">Survival (time, status)</button>
+        </div>
+        <div class="opt-row" id="import-reps-row" hidden style="margin-top:12px">
+          <label>Replicates per group</label>
+          <input class="inp" type="number" id="import-reps" value="3" min="1" style="width:72px" />
+          <span class="muted" style="font-size:12px">First column = row labels; the rest are split into groups of this size.</span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancel</button>
+        <button class="btn btn-accent" id="import-go">Import</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Analyze -->
+  <div class="modal-backdrop" id="modal-analyze" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-head"><h2>Analyze</h2><button class="modal-x" data-close>×</button></div>
+      <div class="modal-body" id="analyze-body"></div>
+      <div class="modal-foot">
+        <button class="btn" data-close>Cancel</button>
+        <button class="btn btn-accent" id="analyze-go">Run analysis</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Guide -->
+  <div class="modal-backdrop" id="modal-guide" hidden>
+    <div class="modal modal-wide">
+      <div class="modal-head"><h2>Which test should I use?</h2><button class="modal-x" data-close>×</button></div>
+      <div class="modal-body" id="guide-body"></div>
+      <div class="modal-foot">
+        <button class="btn" id="guide-back" hidden>‹ Back</button>
+        <span class="toolbar-spacer"></span>
+        <button class="btn" data-close>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="js/stats-core.js"></script>
+  <script src="js/stats-tests.js"></script>
+  <script src="js/stats-normality.js"></script>
+  <script src="js/survival.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/charts.js"></script>
+  <script src="js/guidance.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
