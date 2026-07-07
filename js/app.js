@@ -956,6 +956,9 @@
   function renderGraphView(root, graph) {
     if (!graph) return;
     const o = graph.spec.opts;
+    const ct = graph.spec.chartType;
+    if (['bar', 'dot', 'box', 'xy', 'grouped'].includes(ct)) o.yAxis = o.yAxis || { auto: true, min: '', max: '', log: false, sci: false };
+    if (['xy', 'survival'].includes(ct)) o.xAxis = o.xAxis || { auto: true, min: '', max: '', log: false, sci: false };
     const srcTable = tableById(graph.tableId);
     const head = el('div', { class: 'view-head' },
       el('h1', { class: 'view-title' }, graph.name),
@@ -974,6 +977,33 @@
 
     const controls = el('div', { class: 'graph-controls' });
     const rerender = () => { canvas.innerHTML = buildSVG(graph.spec); saveState(); };
+
+    // ---- category reordering (persists to spec; remaps significance brackets) ----
+    const refresh = () => { saveState(); renderContent(); };
+    const moveArr = (arr, idx) => idx.map((oi) => arr[oi]);
+    function reorderGroups(from, to) {
+      const idx = moveOrder(graph.spec.groups.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
+      graph.spec.groups = moveArr(graph.spec.groups, idx);
+      if (Array.isArray(o.colors)) o.colors = moveArr(o.colors, idx);
+      if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { i: inv[s.i], j: inv[s.j] }));
+      refresh();
+    }
+    function reorderRows(from, to) {
+      const idx = moveOrder(graph.spec.rowNames.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
+      graph.spec.rowNames = moveArr(graph.spec.rowNames, idx);
+      graph.spec.cells = moveArr(graph.spec.cells, idx);
+      if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { cat: inv[s.cat] }));
+      refresh();
+    }
+    function reorderSeries(from, to) {
+      const idx = moveOrder(graph.spec.colNames.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
+      graph.spec.colNames = moveArr(graph.spec.colNames, idx);
+      graph.spec.cells = graph.spec.cells.map((row) => moveArr(row, idx));
+      if (Array.isArray(o.colors)) o.colors = moveArr(o.colors, idx);
+      if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { ja: inv[s.ja], jb: inv[s.jb] }));
+      refresh();
+    }
+    if (['bar', 'dot', 'box'].includes(ct)) enableCatDrag(canvas, reorderGroups);
 
     // chart type (depends on data)
     const types = graph.spec.chartType === 'survival' ? [['survival', 'Survival curve']]
@@ -997,7 +1027,9 @@
     // title & axis labels
     controls.append(ctrlGroup('Title', el('input', { type: 'text', value: o.title || '', oninput: (e) => { o.title = e.target.value; rerender(); } })));
     controls.append(ctrlGroup('Y-axis label', el('input', { type: 'text', value: o.yLabel || '', oninput: (e) => { o.yLabel = e.target.value; rerender(); } })));
-    if (graph.spec.chartType === 'xy' || graph.spec.chartType === 'survival') controls.append(ctrlGroup('X-axis label', el('input', { type: 'text', value: o.xLabel || '', oninput: (e) => { o.xLabel = e.target.value; rerender(); } })));
+    if (o.yAxis) controls.append(axisScaleControls('Y', o.yAxis, { log: true, rerender }));
+    if (ct === 'xy' || ct === 'survival') controls.append(ctrlGroup('X-axis label', el('input', { type: 'text', value: o.xLabel || '', oninput: (e) => { o.xLabel = e.target.value; rerender(); } })));
+    if (o.xAxis) controls.append(axisScaleControls('X', o.xAxis, { log: ct === 'xy', rerender }));
 
     // colors
     const colorItems = graph.spec.groups ? graph.spec.groups.map((g) => g.name) : (graph.spec.chartType === 'grouped' ? graph.spec.colNames : null);
@@ -1010,12 +1042,64 @@
       });
       controls.append(ctrlGroup('Colors', sw));
     }
+    // reorder categories (drag chips; also draggable directly on bar/dot/box charts)
+    if (['bar', 'dot', 'box'].includes(ct) && graph.spec.groups && graph.spec.groups.length > 1)
+      controls.append(ctrlGroup('Category order — drag', reorderChips(graph.spec.groups.map((g) => g.name), reorderGroups)));
+    if (ct === 'grouped') {
+      if (graph.spec.rowNames && graph.spec.rowNames.length > 1) controls.append(ctrlGroup('Row order — drag', reorderChips(graph.spec.rowNames, reorderRows)));
+      if (graph.spec.colNames && graph.spec.colNames.length > 1) controls.append(ctrlGroup('Series order — drag', reorderChips(graph.spec.colNames, reorderSeries)));
+    }
     wrap.append(controls);
     root.append(wrap);
   }
   function ctrlGroup(label, control) { return el('div', { class: 'ctrl-group' }, label ? el('label', {}, label) : null, control); }
   function checkbox(label, checked, on) { const c = el('input', { type: 'checkbox', onchange: (e) => on(e.target.checked) }); if (checked) c.checked = true; return el('label', { class: 'ctrl-row' }, c, label); }
   function toHex(c) { if (/^#/.test(c)) return c; return '#0d9488'; }
+  function numInput(val, ph, on) { return el('input', { type: 'number', step: 'any', placeholder: ph, value: (val === 0 || val) ? val : '', oninput: (e) => on(e.target.value.trim()) }); }
+  // one labeled group: Auto-range checkbox → reveals Min/Max, plus optional Log + Scientific-notation toggles
+  function axisScaleControls(dim, axis, cfg) {
+    const rr = cfg.rerender;
+    const minI = numInput(axis.min, 'Min', (v) => { axis.min = v; if (axis.auto === false) rr(); });
+    const maxI = numInput(axis.max, 'Max', (v) => { axis.max = v; if (axis.auto === false) rr(); });
+    const rangeRow = el('div', { class: 'range-row' }, minI, maxI);
+    rangeRow.style.display = axis.auto === false ? 'flex' : 'none';
+    const kids = [checkbox('Auto range', axis.auto !== false, (v) => { axis.auto = v; rangeRow.style.display = v ? 'none' : 'flex'; rr(); }), rangeRow];
+    if (cfg.log) kids.push(checkbox('Log scale', !!axis.log, (v) => { axis.log = v; rr(); }));
+    kids.push(checkbox('Scientific notation', !!axis.sci, (v) => { axis.sci = v; rr(); }));
+    return ctrlGroup(dim + '-axis scale', el('div', { class: 'axis-ctrls' }, ...kids));
+  }
+  // new index order after moving item from→to
+  function moveOrder(n, from, to) { const idx = []; for (let i = 0; i < n; i++) idx.push(i); const x = idx.splice(from, 1)[0]; idx.splice(to, 0, x); return idx; }
+  function reorderChips(names, onMove) {
+    const box = el('div', { class: 'chips' });
+    names.forEach((nm, i) => {
+      const chip = el('div', { class: 'chip', draggable: 'true', title: 'Drag to reorder' }, '⠿ ' + nm);
+      chip.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(i)); e.dataTransfer.effectAllowed = 'move'; chip.classList.add('dragging'); });
+      chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      chip.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; chip.classList.add('drop-target'); });
+      chip.addEventListener('dragleave', () => chip.classList.remove('drop-target'));
+      chip.addEventListener('drop', (e) => { e.preventDefault(); chip.classList.remove('drop-target'); const from = +e.dataTransfer.getData('text/plain'); if (!isNaN(from) && from !== i) onMove(from, i); });
+      box.append(chip);
+    });
+    return box;
+  }
+  // drag a category directly on the chart via the transparent .cat-hit rects
+  function enableCatDrag(canvas, onMove) {
+    let from = null;
+    canvas.addEventListener('mousedown', (e) => {
+      const hit = e.target.closest && e.target.closest('.cat-hit');
+      if (!hit) return;
+      from = +hit.dataset.i; canvas.classList.add('dragging'); e.preventDefault();
+      const up = (ev) => {
+        document.removeEventListener('mouseup', up); canvas.classList.remove('dragging');
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const tgt = under && under.closest ? under.closest('.cat-hit') : null;
+        if (tgt && from != null) { const to = +tgt.dataset.i; if (!isNaN(to) && to !== from) onMove(from, to); }
+        from = null;
+      };
+      document.addEventListener('mouseup', up);
+    });
+  }
 
   function exportSVG(graph) { download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
   function exportPNG(graph) { Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }

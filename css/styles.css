@@ -184,6 +184,16 @@ table.stats tr:last-child td { border-bottom: none; }
 .ctrl-row { display: flex; gap: 7px; align-items: center; margin-bottom: 7px; font-size: 12.5px; }
 .swatch { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .swatch input[type=color] { width: 26px; height: 22px; border: 1px solid var(--line); border-radius: 5px; padding: 0; cursor: pointer; }
+.ctrl-group input[type=number] { width: 100%; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 7px; font-family: inherit; font-size: 13px; }
+.range-row { display: flex; gap: 8px; margin: 4px 0 2px; }
+.range-row input[type=number] { min-width: 0; }
+.axis-ctrls .ctrl-row { margin-bottom: 5px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; background: #f1f5f9; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 12px; cursor: grab; user-select: none; }
+.chip:active { cursor: grabbing; }
+.chip.dragging { opacity: .4; }
+.chip.drop-target { border-color: #0d9488; box-shadow: 0 0 0 2px rgba(13,148,136,.25); }
+.graph-canvas.dragging { cursor: grabbing; }
 
 /* ---------- modal ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
