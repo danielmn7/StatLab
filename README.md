@@ -6,6 +6,19 @@ your machine.
 
 ![StatLab](https://img.shields.io/badge/status-ready-0d9488) ![Electron](https://img.shields.io/badge/desktop-Electron-2563eb)
 
+## Download & install
+
+**Windows:** download the installer from the
+[**latest release**](https://github.com/danielmn7/StatLab/releases/latest) —
+grab `StatLab-Setup-1.0.0.exe`, double-click it, and follow the prompts (it adds
+Start Menu + desktop shortcuts and lets you pick the install folder). No Node,
+npm, or accounts required.
+
+> Windows may show a SmartScreen "unrecognized app" warning because the installer
+> isn't code-signed — choose **More info → Run anyway**.
+
+macOS and Linux users can build from source with the steps below.
+
 ## Quick start (desktop app)
 
 ```bash
