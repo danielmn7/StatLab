@@ -1022,8 +1022,8 @@
     if (!graph) return;
     const o = graph.spec.opts;
     const ct = graph.spec.chartType;
-    if (['bar', 'dot', 'box', 'xy', 'grouped'].includes(ct)) o.yAxis = o.yAxis || { auto: true, min: '', max: '', log: false, sci: false };
-    if (['xy', 'survival'].includes(ct)) o.xAxis = o.xAxis || { auto: true, min: '', max: '', log: false, sci: false };
+    if (['bar', 'dot', 'box', 'xy', 'grouped'].includes(ct)) o.yAxis = o.yAxis || { auto: true, min: '', max: '', log: false, sci: false, step: '' };
+    if (['xy', 'survival'].includes(ct)) o.xAxis = o.xAxis || { auto: true, min: '', max: '', log: false, sci: false, step: '' };
     const srcTable = tableById(graph.tableId);
     const head = el('div', { class: 'view-head' },
       el('h1', { class: 'view-title' }, graph.name),
@@ -1148,6 +1148,10 @@
     const kids = [checkbox('Auto range', axis.auto !== false, (v) => { axis.auto = v; rangeRow.style.display = v ? 'none' : 'flex'; rr(); }), rangeRow];
     if (cfg.log) kids.push(checkbox('Log scale', !!axis.log, (v) => { axis.log = v; rr(); }));
     kids.push(checkbox('Scientific notation', !!axis.sci, (v) => { axis.sci = v; rr(); }));
+    // custom tick interval (blank = automatic); ignored on a log axis, where ticks are decades
+    const stepI = numInput(axis.step, 'auto', (v) => { axis.step = v; rr(); });
+    stepI.min = '0';
+    kids.push(el('div', { class: 'range-row axis-step' }, el('span', {}, 'Tick interval'), stepI));
     return ctrlGroup(dim + '-axis scale', el('div', { class: 'axis-ctrls' }, ...kids));
   }
   // new index order after moving item from→to
