@@ -521,7 +521,13 @@
       box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Name the row factor'), el('input', { class: 'inp', value: p.rowFactor, oninput: (e) => { p.rowFactor = e.target.value; } })));
       box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Name the column factor'), el('input', { class: 'inp', value: p.colFactor, oninput: (e) => { p.colFactor = e.target.value; } })));
       box.append(sel('Multiple comparisons', 'phmethod', [{ v: 'sidak', t: 'Šídák (recommended)' }, { v: 'tukey', t: 'Tukey' }, { v: 'holm-sidak', t: 'Holm-Šídák' }, { v: 'bonferroni', t: 'Bonferroni' }], 'sidak'));
-      box.append(sel('Compare', 'phdir', [{ v: 'colsWithinRow', t: 'Column groups within each row' }, { v: 'rowsWithinCol', t: 'Rows within each column group' }], 'colsWithinRow'));
+      box.append(sel('Compare', 'phdir', [
+        { v: 'colsWithinRow', t: 'Column groups within each row (simple effects)' },
+        { v: 'rowsWithinCol', t: 'Rows within each column group (simple effects)' },
+        { v: 'colMeans', t: 'Column-group means (main effect)' },
+        { v: 'rowMeans', t: 'Row means (main effect)' },
+        { v: 'cells', t: 'Every cell vs every cell' },
+      ], 'colsWithinRow'));
     }
     if (kind === 'grubbs') {
       box.append(sel('Mode', 'iterative', [{ v: 'single', t: 'Single most extreme value' }, { v: 'iterative', t: 'Iterative (find several / ESD)' }], 'single'));
@@ -858,7 +864,14 @@
       cm.rowNames.forEach((rn, i) => cb.append(el('tr', {}, el('td', {}, rn), ...cm.colNames.map((_, j) => el('td', { class: 'num' }, m.cellN[i][j] ? num(m.cellMeans[i][j]) + ' ±' + num(m.cellSD[i][j], 2) + ' (n=' + m.cellN[i][j] + ')' : '—')))));
       cmeans.append(cb);
       const ph = T.twoWayPosthoc(m, spec.phmethod, spec.phdir);
-      const dirText = spec.phdir === 'colsWithinRow' ? spec.colFactor + ' within each ' + spec.rowFactor : spec.rowFactor + ' within each ' + spec.colFactor;
+      const dirTextMap = {
+        colsWithinRow: spec.colFactor + ' within each ' + spec.rowFactor,
+        rowsWithinCol: spec.rowFactor + ' within each ' + spec.colFactor,
+        colMeans: spec.colFactor + ' means (main effect, averaged over ' + spec.rowFactor + ')',
+        rowMeans: spec.rowFactor + ' means (main effect, averaged over ' + spec.colFactor + ')',
+        cells: 'every cell mean vs every other cell',
+      };
+      const dirText = dirTextMap[spec.phdir] || dirTextMap.colsWithinRow;
       const node = card('Two-way ANOVA', vnode, at,
         m.interaction ? null : el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Only one value per cell — the interaction cannot be estimated, so this fits an additive model (assumes no interaction).'),
         el('div', { class: 'section-label' }, 'Cell means (mean ± SD)'), cmeans,
@@ -930,11 +943,16 @@
   }
   function twoWayPosthocTable(ph) {
     const t = el('table', { class: 'stats' });
-    const cols = ph.method === 'tukey' ? ['Within', 'Comparison', 'Mean diff', 'q', 'P', ''] : ['Within', 'Comparison', 'Mean diff', 't', 'P (adj)', ''];
+    const hasWithin = ph.direction === 'colsWithinRow' || ph.direction === 'rowsWithinCol';
+    const statCol = ph.method === 'tukey' ? 'q' : 't', pCol = ph.method === 'tukey' ? 'P' : 'P (adj)';
+    const cols = (hasWithin ? ['Within'] : []).concat(['Comparison', 'Mean diff', statCol, pCol, '']);
     t.append(el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))));
     const tb = el('tbody');
+    if (!ph.comparisons.length) tb.append(el('tr', {}, el('td', { colspan: cols.length, class: 'muted' }, 'No comparisons available for this design.')));
     ph.comparisons.forEach((c) => {
-      const cells = [el('td', {}, c.within), el('td', {}, c.a + ' vs ' + c.b), el('td', { class: 'num' }, num(c.diff))];
+      const cells = [];
+      if (hasWithin) cells.push(el('td', {}, c.within));
+      cells.push(el('td', {}, c.a + ' vs ' + c.b), el('td', { class: 'num' }, num(c.diff)));
       cells.push(el('td', { class: 'num' }, ph.method === 'tukey' ? num(c.q, 3) : num(c.t, 3)));
       cells.push(el('td', { class: 'num' }, fmtP(c.p)));
       cells.push(el('td', { class: 'num sig-star' }, c.sig ? stars(c.p) : 'ns'));
