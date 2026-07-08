@@ -1105,6 +1105,26 @@
       controls.append(ctrlGroup('', checkbox('Show 95% CI bands', o.showCI, (v) => { o.showCI = v; rerender(); })));
       controls.append(ctrlGroup('', checkbox('Numbers at risk', o.atRisk !== false, (v) => { o.atRisk = v; rerender(); })));
     }
+    // bar / box thickness & point spread (issue #15): narrower marks ⇒ more space between categories
+    if (['bar', 'dot', 'box'].includes(graph.spec.chartType)) {
+      const ctb = graph.spec.chartType;
+      const wLabel = ctb === 'box' ? 'Box width' : ctb === 'dot' ? 'Point spread' : 'Bar width';
+      const defFrac = ctb === 'bar' ? 0.6 : 0.5;
+      const cur = () => (o.barWidth != null && isFinite(+o.barWidth)) ? +o.barWidth : defFrac;
+      const readout = el('span', { class: 'width-readout' }, Math.round(cur() * 100) + '%');
+      const slider = el('input', { type: 'range', min: '0.1', max: '1', step: '0.05', value: cur(),
+        oninput: (e) => { o.barWidth = parseFloat(e.target.value); readout.textContent = Math.round(o.barWidth * 100) + '%'; rerender(); } });
+      const sliderRow = el('div', { class: 'range-row' }, slider, readout);
+      sliderRow.style.display = o.barWidth == null ? 'none' : 'flex';
+      const auto = checkbox('Auto width', o.barWidth == null, (v) => {
+        if (v) delete o.barWidth; else { o.barWidth = parseFloat(slider.value) || defFrac; readout.textContent = Math.round(o.barWidth * 100) + '%'; }
+        sliderRow.style.display = v ? 'none' : 'flex'; rerender();
+      });
+      controls.append(ctrlGroup(wLabel, el('div', { class: 'axis-ctrls' }, auto, sliderRow)));
+      controls.append(el('div', { class: 'ctrl-note' }, ctb === 'dot'
+        ? 'Wider spreads the points apart; narrower packs them into a tighter column.'
+        : 'Narrower ' + (ctb === 'box' ? 'boxes' : 'bars') + ' leave more space between categories.'));
+    }
     // title & axis labels
     controls.append(ctrlGroup('Title', el('input', { type: 'text', value: o.title || '', oninput: (e) => { o.title = e.target.value; rerender(); } })));
     controls.append(ctrlGroup('Y-axis label', el('input', { type: 'text', value: o.yLabel || '', oninput: (e) => { o.yLabel = e.target.value; rerender(); } })));

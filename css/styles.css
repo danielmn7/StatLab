@@ -193,8 +193,10 @@ table.stats tr:last-child td { border-bottom: none; }
 .swatch { display: inline-flex; gap: 5px; flex-wrap: wrap; }
 .swatch input[type=color] { width: 26px; height: 22px; border: 1px solid var(--line); border-radius: 5px; padding: 0; cursor: pointer; }
 .ctrl-group input[type=number] { width: 100%; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 7px; font-family: inherit; font-size: 13px; }
-.range-row { display: flex; gap: 8px; margin: 4px 0 2px; }
+.range-row { display: flex; gap: 8px; margin: 4px 0 2px; align-items: center; }
 .range-row input[type=number] { min-width: 0; }
+.range-row input[type=range] { flex: 1; min-width: 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
+.width-readout { font-size: 12px; color: var(--ink-soft); min-width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
 .axis-ctrls .ctrl-row { margin-bottom: 5px; }
 .axis-step { align-items: center; margin-top: 6px; }
 .axis-step > span { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
