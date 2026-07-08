@@ -212,6 +212,24 @@ table.stats tr:last-child td { border-bottom: none; }
 .sig-badge.is-sig { color: #0d9488; }
 .graph-canvas.dragging { cursor: grabbing; }
 .ctrl-note { font-size: 11.5px; color: var(--muted); line-height: 1.4; margin: -6px 0 15px; }
+/* color-palette picker — scrollable gallery of named schemes */
+.palette-list { display: flex; flex-direction: column; gap: 2px; max-height: 236px; overflow-y: auto; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; }
+.palette-group-head { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 6px 2px 1px; }
+.palette-group-head:first-child { margin-top: 1px; }
+.palette-item { padding: 5px 6px; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
+.palette-item:hover { background: #eef2f7; }
+.palette-item.selected { border-color: var(--accent); background: var(--accent-soft); }
+.palette-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.palette-name { flex: 1; font-size: 12px; font-weight: 550; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pal-badge { flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: .02em; color: var(--accent-dark); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 4px; padding: 0 3px; }
+.palette-item.selected .pal-badge { background: #fff; }
+.palette-swatches { display: flex; height: 13px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(16,24,40,.06); }
+.palette-sw { flex: 1 1 0; min-width: 0; }
+/* per-series point-symbol pickers */
+.marker-list { display: flex; flex-direction: column; gap: 6px; }
+.marker-row { display: flex; align-items: center; gap: 8px; }
+.marker-name { flex: 1; font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.marker-row select { flex-shrink: 0; width: 108px; padding: 5px 6px; border: 1px solid var(--line-strong); border-radius: 7px; font-family: inherit; font-size: 12.5px; }
 /* hover-stats tooltip for bar charts */
 .chart-tip {
   position: fixed; z-index: 1000; pointer-events: none; display: none;
