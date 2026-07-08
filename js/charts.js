@@ -186,15 +186,17 @@ const Charts = (function () {
     return p < 0.0001 ? '****' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : 'ns';
   }
 
-  // significance brackets above plot. sig:[{i,j,label,p?}] referencing x-centers cx[]
+  // significance brackets above plot. sig:[{i,j,label,p?,on?}] referencing x-centers cx[].
+  // Entries with on===false are hidden (the graph's "Comparisons shown" list toggles them).
   function sigBrackets(f, cx, topAt, sig, style) {
-    if (!sig || !sig.length) return '';
+    const shown = (sig || []).filter((b) => b.on !== false);
+    if (!shown.length) return '';
     const st = style || sigStyleOf(null);
     const weight = st.bold ? 600 : 400;
     const h = 6, gap = st.fontSize + 9.5;   // stack spacing tracks text size (22 at the default)
     let s = '', level = 0;
     const baseY = Math.min(...topAt) - 14;
-    sig.forEach((b) => {
+    shown.forEach((b) => {
       const x1 = cx[b.i], x2 = cx[b.j];
       if (x1 == null || x2 == null) return;
       const y = baseY - level * gap;
@@ -539,7 +541,7 @@ const Charts = (function () {
     // significance brackets within categories: sig=[{cat,ja,jb,label,p?}]
     const gst = sigStyleOf(opts);
     const gWeight = gst.bold ? 600 : 400;
-    (opts.sig || []).forEach((g) => {
+    (opts.sig || []).filter((g) => g.on !== false).forEach((g) => {
       const row = barX[g.cat]; if (!row || row[g.ja] == null || row[g.jb] == null) return;
       const x1 = row[g.ja], x2 = row[g.jb];
       const top = Math.min(sc.toY(cs[g.cat][g.ja].m + cs[g.cat][g.ja].err), sc.toY(cs[g.cat][g.jb].m + cs[g.cat][g.jb].err)) - 12;
