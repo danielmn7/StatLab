@@ -202,6 +202,18 @@ table.stats tr:last-child td { border-bottom: none; }
 .chip.dragging { opacity: .4; }
 .chip.drop-target { border-color: #0d9488; box-shadow: 0 0 0 2px rgba(13,148,136,.25); }
 .graph-canvas.dragging { cursor: grabbing; }
+.ctrl-note { font-size: 11.5px; color: var(--muted); line-height: 1.4; margin: -6px 0 15px; }
+/* hover-stats tooltip for bar charts */
+.chart-tip {
+  position: fixed; z-index: 1000; pointer-events: none; display: none;
+  min-width: 132px; padding: 8px 10px; border-radius: 8px;
+  background: var(--ink); color: #fff; box-shadow: var(--shadow-lg);
+  font-size: 12px; line-height: 1.4;
+}
+.chart-tip .tip-title { font-weight: 700; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid rgba(255,255,255,.18); }
+.chart-tip .tip-row { display: flex; justify-content: space-between; gap: 16px; }
+.chart-tip .tip-row span { color: #b9c4d0; }
+.chart-tip .tip-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ---------- modal ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
