@@ -19,6 +19,34 @@ npm, or accounts required.
 
 macOS and Linux users can build from source with the steps below.
 
+### Run the latest version from source
+
+The installer `.exe` is only rebuilt for tagged releases, so it can lag behind
+`main`. To always run the current code straight from GitHub:
+
+**Requirements:** [Git](https://git-scm.com/downloads) and
+[Node.js](https://nodejs.org/) (includes npm).
+
+```bash
+git clone https://github.com/danielmn7/StatLab.git
+cd StatLab
+npm install        # first time only, installs Electron
+npm start          # launches the StatLab desktop app
+```
+
+Already have a clone? Pull the latest changes and reinstall dependencies before
+starting:
+
+```bash
+cd StatLab
+git pull
+npm install
+npm start
+```
+
+No install/build step required to try it in a browser instead — see
+**"Prefer the browser?"** below.
+
 ## Quick start (desktop app)
 
 ```bash
