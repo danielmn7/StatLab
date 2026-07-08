@@ -1131,6 +1131,13 @@
     if (o.yAxis) controls.append(axisScaleControls('Y', o.yAxis, { log: true, rerender }));
     if (ct === 'xy' || ct === 'survival') controls.append(ctrlGroup('X-axis label', el('input', { type: 'text', value: o.xLabel || '', oninput: (e) => { o.xLabel = e.target.value; rerender(); } })));
     if (o.xAxis) controls.append(axisScaleControls('X', o.xAxis, { log: ct === 'xy', rerender }));
+    // fonts: title size, axis-label size (also scales category & tick text), shared bold (issue #16)
+    o.fontStyle = o.fontStyle || {};
+    const fst = o.fontStyle, feff = Charts.textStyleOf(o);
+    controls.append(ctrlGroup('Title size (px)', el('input', { type: 'number', min: '8', max: '40', step: '0.5', value: feff.titleSize, oninput: (e) => { const v = parseFloat(e.target.value); if (isFinite(v)) { fst.titleSize = v; rerender(); } } })));
+    controls.append(ctrlGroup('Axis label size (px)', el('input', { type: 'number', min: '7', max: '22', step: '0.5', value: feff.labelSize, oninput: (e) => { const v = parseFloat(e.target.value); if (isFinite(v)) { fst.labelSize = v; rerender(); } } })));
+    controls.append(ctrlGroup('', checkbox('Bold title & axis labels', feff.bold, (v) => { fst.bold = v; rerender(); })));
+    controls.append(el('div', { class: 'ctrl-note' }, 'Axis-label size also scales the category names and tick numbers; tick numbers stay smaller so they don’t crowd the plot.'));
 
     // ---- color palette + per-series color overrides ----
     // only chart types whose builders honor opts.colors (paired/xy use fixed colors)

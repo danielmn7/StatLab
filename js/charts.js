@@ -144,20 +144,22 @@ const Charts = (function () {
     const pw = W - m.left - m.right, ph = H - m.top - m.bottom;
     return { W, H, m, pw, ph, x0: m.left, x1: m.left + pw, y0: m.top, y1: m.top + ph };
   }
-  function open(f, title) {
+  function open(f, title, ts) {
+    ts = ts || textStyleOf(null);
     return `<svg viewBox="0 0 ${f.W} ${f.H}" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" style="background:#fff">` +
       `<rect x="0" y="0" width="${f.W}" height="${f.H}" fill="#ffffff"/>` +
-      (title ? `<text x="${f.W / 2}" y="26" text-anchor="middle" font-size="15.5" font-weight="650" fill="#1c2733">${esc(title)}</text>` : '');
+      (title ? `<text x="${f.W / 2}" y="26" text-anchor="middle" font-size="${ts.titleSize}" font-weight="${ts.titleWeight}" fill="#1c2733">${esc(title)}</text>` : '');
   }
-  function yAxis(f, sc, label) {
+  function yAxis(f, sc, label, ts) {
+    ts = ts || textStyleOf(null);
     let s = `<line x1="${f.x0}" y1="${f.y0}" x2="${f.x0}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     sc.ticks.forEach((t) => {
       const y = sc.toY(t);
       if (y < f.y0 - 0.5 || y > f.y1 + 0.5) return;
       s += `<line x1="${f.x0 - 5}" y1="${y}" x2="${f.x0}" y2="${y}" stroke="#1c2733" stroke-width="1.1"/>`;
-      s += `<text x="${f.x0 - 9}" y="${y + 4}" text-anchor="end" font-size="11.5" fill="#5b6b7b">${(sc.fmt || fmt)(t)}</text>`;
+      s += `<text x="${f.x0 - 9}" y="${y + 4}" text-anchor="end" font-size="${ts.tickSize}" fill="#5b6b7b">${(sc.fmt || fmt)(t)}</text>`;
     });
-    if (label) s += `<text transform="translate(${18},${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(label)}</text>`;
+    if (label) s += `<text transform="translate(${18},${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(label)}</text>`;
     return s;
   }
   // ---- axis scaling: linear/log, auto or custom range, plain/scientific labels ----
@@ -260,6 +262,23 @@ const Charts = (function () {
       lineWidth: st.lineWidth != null && isFinite(+st.lineWidth) ? +st.lineWidth : 1.2,
     };
   }
+  // resolve title / axis-label / tick-number font appearance from opts.fontStyle (issue #16).
+  // Back-compatible: with no fontStyle set (older or freshly-loaded figures) this returns the
+  // original hardcoded sizes/weights, so existing figures render pixel-identically. One "label
+  // size" scales axis titles, category names and tick numbers together, but category text and
+  // (especially) numeric ticks stay progressively smaller and are damped/capped so a large
+  // label size enlarges the headings without crowding the plot with oversized numbers.
+  function textStyleOf(opts) {
+    const st = (opts && opts.fontStyle) || {};
+    let titleSize = st.titleSize != null && isFinite(+st.titleSize) ? +st.titleSize : 15.5;
+    let labelSize = st.labelSize != null && isFinite(+st.labelSize) ? +st.labelSize : 12.5;
+    titleSize = Math.min(40, Math.max(8, titleSize));
+    labelSize = Math.min(22, Math.max(7, labelSize));
+    const bold = st.bold !== false;                                  // default bold → title 650 / axis 600 as before
+    const catSize = Math.max(7, labelSize - 0.5);                    // category / group names sit just under the axis title
+    const tickSize = Math.max(7, Math.min(labelSize - 0.5, 11.5 + (labelSize - 12.5) * 0.6)); // numeric ticks: damped so they never dominate
+    return { titleSize, labelSize, catSize, tickSize, titleWeight: bold ? 650 : 400, labelWeight: bold ? 600 : 400, bold };
+  }
   // label for one bracket from its p-value per the chosen notation; falls back to a
   // pre-stored label (figures saved before p-values were retained) when p is absent.
   function sigLabel(b, notation) {
@@ -321,9 +340,10 @@ const Charts = (function () {
     const n = groups.length;
     const slot = f.pw / n, bw = slotWidth(opts, slot, 0.6, 58);
     const barFill = opts.showPoints ? 0.5 : 0.82;   // dim the bar when points overlay it so they read clearly
-    let s = open(f, opts.title);
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
     // zero line / y axis
-    s += yAxis(f, sc, opts.yLabel || 'Value');
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
     const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
@@ -349,7 +369,7 @@ const Charts = (function () {
         st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       }
       // x label (outside clip)
-      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(st.name)}</text>`;
+      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(st.name)}</text>`;
       tally(opts.showPoints ? st.values : [st.m], sc, t);
     });
     s += clipWrap(f, uid, marks);
@@ -380,8 +400,9 @@ const Charts = (function () {
     const spread = slotWidth(opts, slot, 0.5, 46);                 // horizontal extent of the jittered point cloud
     const customW = opts.barWidth != null && isFinite(+opts.barWidth) && +opts.barWidth > 0;
     const wm = customW ? Math.max(12, spread / 2) : 22;            // mean/median bar half-width brackets the cloud
-    let s = open(f, opts.title);
-    s += yAxis(f, sc, opts.yLabel || 'Value');
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
     const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
@@ -402,7 +423,7 @@ const Charts = (function () {
         marks += `<line x1="${x - 8}" y1="${sc.toY(m - err)}" x2="${x + 8}" y2="${sc.toY(m - err)}" stroke="#1c2733" stroke-width="1.3"/>`;
         tops.push(sc.toY(m + err));
       } else tops.push(sc.toY(Math.max(...g.values)));
-      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(g.name)}</text>`;
+      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
       tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
@@ -423,8 +444,9 @@ const Charts = (function () {
     const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6, yAx);
     const uid = ++_uid;
     const n = groups.length, slot = f.pw / n, bw = slotWidth(opts, slot, 0.5, 48);
-    let s = open(f, opts.title);
-    s += yAxis(f, sc, opts.yLabel || 'Value');
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
     const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
@@ -446,7 +468,7 @@ const Charts = (function () {
       marks += `<line x1="${x - bw / 4}" y1="${sc.toY(wlo)}" x2="${x + bw / 4}" y2="${sc.toY(wlo)}" stroke="${col}" stroke-width="1.3"/>`;
       sorted.filter((v) => v < lowF || v > highF).forEach((v) => { marks += `<circle cx="${x}" cy="${sc.toY(v)}" r="3" fill="none" stroke="${col}" stroke-width="1.2"/>`; });
       tops.push(sc.toY(whi));
-      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(g.name)}</text>`;
+      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
       tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
@@ -467,8 +489,9 @@ const Charts = (function () {
     const all = pairs.flat();
     const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6);
     const xA = f.x0 + f.pw * 0.32, xB = f.x0 + f.pw * 0.68;
-    let s = open(f, opts.title);
-    s += yAxis(f, sc, opts.yLabel || 'Value');
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     pairs.forEach(([a, b]) => {
       const up = b >= a;
@@ -476,8 +499,8 @@ const Charts = (function () {
       s += `<circle cx="${xA}" cy="${sc.toY(a)}" r="3.6" fill="#0d9488"/>`;
       s += `<circle cx="${xB}" cy="${sc.toY(b)}" r="3.6" fill="#7c3aed"/>`;
     });
-    s += `<text x="${xA}" y="${f.y1 + 18}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(opts.labelA || 'Before')}</text>`;
-    s += `<text x="${xB}" y="${f.y1 + 18}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(opts.labelB || 'After')}</text>`;
+    s += `<text x="${xA}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.labelA || 'Before')}</text>`;
+    s += `<text x="${xB}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.labelB || 'After')}</text>`;
     s += '</svg>';
     return s;
   }
@@ -489,12 +512,13 @@ const Charts = (function () {
     const sc = makeYScale(f, Math.min(...ys), Math.max(...ys), 6, yAx);
     const scx = (() => { const a = axisScale(Math.min(...xs), Math.max(...xs), xAx, 6); a.toX = (v) => f.x0 + a.frac(v) * f.pw; return a; })();
     const uid = ++_uid;
-    let s = open(f, opts.title);
-    s += yAxis(f, sc, opts.yLabel || 'Y');
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Y', ts);
     // x axis
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
-    scx.ticks.forEach((tk) => { const x = scx.toX(tk); if (x < f.x0 - 0.5 || x > f.x1 + 0.5) return; s += `<line x1="${x}" y1="${f.y1}" x2="${x}" y2="${f.y1 + 5}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${x}" y="${f.y1 + 19}" text-anchor="middle" font-size="11.5" fill="#5b6b7b">${scx.fmt(tk)}</text>`; });
-    s += `<text x="${(f.x0 + f.x1) / 2}" y="${f.H - 14}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(opts.xLabel || 'X')}</text>`;
+    scx.ticks.forEach((tk) => { const x = scx.toX(tk); if (x < f.x0 - 0.5 || x > f.x1 + 0.5) return; s += `<line x1="${x}" y1="${f.y1}" x2="${x}" y2="${f.y1 + 5}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${x}" y="${f.y1 + 19}" text-anchor="middle" font-size="${ts.tickSize}" fill="#5b6b7b">${scx.fmt(tk)}</text>`; });
+    s += `<text x="${(f.x0 + f.x1) / 2}" y="${f.H - 14}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.xLabel || 'X')}</text>`;
     let marks = '';
     // regression line + CI band
     if (opts.regression) {
@@ -541,15 +565,16 @@ const Charts = (function () {
     const scx = (() => { const a = axisScale(0, maxT, xAx, 6); a.toX = (v) => f.x0 + a.frac(v) * f.pw; return a; })();
     const toY = (sv) => f.y1 - sv * f.ph;
     const uid = ++_uid;
-    let s = open(f, opts.title);
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
     // y axis 0..1
     s += `<line x1="${f.x0}" y1="${f.y0}" x2="${f.x0}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
-    for (let p = 0; p <= 1.0001; p += 0.25) { const y = toY(p); s += `<line x1="${f.x0 - 5}" y1="${y}" x2="${f.x0}" y2="${y}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${f.x0 - 9}" y="${y + 4}" text-anchor="end" font-size="11.5" fill="#5b6b7b">${opts.percent ? p * 100 : p.toFixed(2)}</text>`; }
-    s += `<text transform="translate(16,${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(opts.yLabel || (opts.percent ? 'Percent survival' : 'Survival probability'))}</text>`;
+    for (let p = 0; p <= 1.0001; p += 0.25) { const y = toY(p); s += `<line x1="${f.x0 - 5}" y1="${y}" x2="${f.x0}" y2="${y}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${f.x0 - 9}" y="${y + 4}" text-anchor="end" font-size="${ts.tickSize}" fill="#5b6b7b">${opts.percent ? p * 100 : p.toFixed(2)}</text>`; }
+    s += `<text transform="translate(16,${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.yLabel || (opts.percent ? 'Percent survival' : 'Survival probability'))}</text>`;
     // x axis
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
-    scx.ticks.forEach((t) => { const x = scx.toX(t); if (x < f.x0 - 0.5 || x > f.x1 + 0.5) return; s += `<line x1="${x}" y1="${f.y1}" x2="${x}" y2="${f.y1 + 5}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="11.5" fill="#5b6b7b">${scx.fmt(t)}</text>`; });
-    s += `<text x="${(f.x0 + f.x1) / 2}" y="${f.y1 + 40}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(opts.xLabel || 'Time')}</text>`;
+    scx.ticks.forEach((t) => { const x = scx.toX(t); if (x < f.x0 - 0.5 || x > f.x1 + 0.5) return; s += `<line x1="${x}" y1="${f.y1}" x2="${x}" y2="${f.y1 + 5}" stroke="#1c2733" stroke-width="1.1"/>`; s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.tickSize}" fill="#5b6b7b">${scx.fmt(t)}</text>`; });
+    s += `<text x="${(f.x0 + f.x1) / 2}" y="${f.y1 + 40}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.xLabel || 'Time')}</text>`;
     // curves (clipped to plot area)
     let cmarks = '';
     curves.forEach((c, ci) => {
@@ -611,8 +636,9 @@ const Charts = (function () {
     const yAx = opts.yAxis || {};
     const sc = makeYScale(f, Math.min(0, lo), hi * 1.08, 6, yAx);
     const uid = ++_uid;
-    let s = open(f, opts.title);
-    s += yAxis(f, sc, opts.yLabel || 'Value');
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${sc.toY(baseVal(sc))}" x2="${f.x1}" y2="${sc.toY(baseVal(sc))}" stroke="#1c2733" stroke-width="1.3"/>`;
     const slot = f.pw / a;
     const groupW = Math.min(slot * 0.82, b * 46);
@@ -637,7 +663,7 @@ const Charts = (function () {
         }
         tally([c.m], sc, t);
       }
-      s += `<text x="${cx0}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(rowNames[i])}</text>`;
+      s += `<text x="${cx0}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(rowNames[i])}</text>`;
     }
     s += clipWrap(f, uid, marks);
     // significance brackets within categories: sig=[{cat,ja,jb,label,p?}]
@@ -678,7 +704,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf };
+  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;
