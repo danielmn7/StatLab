@@ -89,11 +89,23 @@ const Charts = (function () {
     if (!ticks.length) ticks.push(min, max);
     return ticks;
   }
-  // axis: {auto,min,max,log,sci}. Returns {ticks,min,max,log,fmt(v),frac(v)}. frac maps value → 0..1.
+  // ticks at a user-specified interval across [min,max]; returns [] when the step is
+  // unusable (non-positive, or so fine it would yield an absurd number of ticks) so
+  // callers can fall back to the automatic ticks.
+  function ticksByStep(min, max, step) {
+    if (!(step > 0) || !isFinite(min) || !isFinite(max) || !(max > min)) return [];
+    if ((max - min) / step > 1000) return [];
+    const ticks = [], eps = step * 1e-6;
+    for (let v = Math.ceil((min - eps) / step) * step; v <= max + eps; v += step) ticks.push(+v.toPrecision(12));
+    return ticks;
+  }
+  // axis: {auto,min,max,log,sci,step}. Returns {ticks,min,max,log,fmt(v),frac(v)}. frac maps value → 0..1.
   function axisScale(dataLo, dataHi, axis, nticks) {
     axis = axis || {}; nticks = nticks || 6;
     const cMin = (axis.auto === false && axis.min !== '' && axis.min != null && isFinite(+axis.min)) ? +axis.min : null;
     const cMax = (axis.auto === false && axis.max !== '' && axis.max != null && isFinite(+axis.max)) ? +axis.max : null;
+    // custom tick interval applies to linear axes whether the range is auto or fixed
+    const cStep = (axis.step !== '' && axis.step != null && isFinite(+axis.step) && +axis.step > 0) ? +axis.step : null;
     if (axis.log) {
       const hi = cMax != null ? cMax : dataHi;
       let lo = cMin != null ? cMin : dataLo;
@@ -112,6 +124,7 @@ const Charts = (function () {
       if (!(max > min)) { const nt = niceTicks(dataLo, dataHi, nticks); min = nt.min; max = nt.max; ticks = nt.ticks; }
       else ticks = niceCustom(min, max, nticks);
     } else { const nt = niceTicks(dataLo, dataHi, nticks); min = nt.min; max = nt.max; ticks = nt.ticks; }
+    if (cStep) { const stepped = ticksByStep(min, max, cStep); if (stepped.length) ticks = stepped; }
     return { ticks, min, max, log: false, fmt: mkFmt(axis), frac: (v) => (v - min) / (max - min) };
   }
   function makeYScale(f, lo, hi, nticks, axis) {
