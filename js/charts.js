@@ -291,6 +291,17 @@ const Charts = (function () {
     return s;
   }
 
+  // Width of a categorical mark (bar / box / point cloud) within its per-category
+  // slot. When opts.barWidth is set it is an explicit fraction of the slot (clamped
+  // to 0.05–1) so users can tighten or spread the categories along the x-axis;
+  // unset falls back to the legacy cap-based sizing so existing figures are
+  // unchanged. See issue #15 (adjustable bar/column width & spacing).
+  function slotWidth(opts, slot, mult, cap) {
+    const bw = opts && opts.barWidth;
+    if (bw != null && isFinite(+bw) && +bw > 0) return slot * Math.min(1, Math.max(0.05, +bw));
+    return Math.min(cap, slot * mult);
+  }
+
   // ---- 1. bar chart with error bars ----
   function barChart(groups, opts = {}) {
     opts = opts || {};
@@ -308,7 +319,7 @@ const Charts = (function () {
     const sc = makeYScale(f, dmin, hi * 1.08, 6, yAx);
     const uid = ++_uid;
     const n = groups.length;
-    const slot = f.pw / n, bw = Math.min(58, slot * 0.6);
+    const slot = f.pw / n, bw = slotWidth(opts, slot, 0.6, 58);
     const barFill = opts.showPoints ? 0.5 : 0.82;   // dim the bar when points overlay it so they read clearly
     let s = open(f, opts.title);
     // zero line / y axis
@@ -366,6 +377,9 @@ const Charts = (function () {
     const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6, yAx);
     const uid = ++_uid;
     const n = groups.length, slot = f.pw / n;
+    const spread = slotWidth(opts, slot, 0.5, 46);                 // horizontal extent of the jittered point cloud
+    const customW = opts.barWidth != null && isFinite(+opts.barWidth) && +opts.barWidth > 0;
+    const wm = customW ? Math.max(12, spread / 2) : 22;            // mean/median bar half-width brackets the cloud
     let s = open(f, opts.title);
     s += yAxis(f, sc, opts.yLabel || 'Value');
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
@@ -379,9 +393,8 @@ const Charts = (function () {
       const err = errType === 'sem' ? se : errType === 'ci95' ? tcrit95(g.values.length - 1) * se : sdv;
       const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
       let seed = i * 131 + 17;
-      g.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * Math.min(46, slot * 0.5); const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.6, ptShape(opts, i, vi, seriesShape), { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
+      g.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * spread; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.6, ptShape(opts, i, vi, seriesShape), { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       // mean line + error
-      const wm = 22;
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
       if (errType !== 'none') {
         marks += `<line x1="${x}" y1="${sc.toY(m - err)}" x2="${x}" y2="${sc.toY(m + err)}" stroke="#1c2733" stroke-width="1.3"/>`;
@@ -409,7 +422,7 @@ const Charts = (function () {
     const all = groups.flatMap((g) => g.values);
     const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6, yAx);
     const uid = ++_uid;
-    const n = groups.length, slot = f.pw / n, bw = Math.min(48, slot * 0.5);
+    const n = groups.length, slot = f.pw / n, bw = slotWidth(opts, slot, 0.5, 48);
     let s = open(f, opts.title);
     s += yAxis(f, sc, opts.yLabel || 'Value');
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
