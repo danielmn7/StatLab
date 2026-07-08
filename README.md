@@ -89,8 +89,10 @@ The grid behaves like a spreadsheet:
 Bar charts with error bars (SD / SEM / 95% CI), column scatter (dot) plots, box-
 and-whisker plots, before–after paired plots, XY scatter with regression line and
 CI band, and Kaplan-Meier curves with censor ticks, numbers-at-risk, and CI bands.
-Significance brackets (`*`, `**`, `***`, `****`) are added automatically. Customize
-colors, titles, axes, and error-bar type, then export to **SVG** or **PNG**.
+Significance brackets are added automatically — switch them between asterisks
+(`*`, `**`, `***`, `****`), an exact **P value**, or a **P < threshold** summary, and
+restyle their color, text size, weight, and connecting line. Customize colors, titles,
+axes, and error-bar type too, then export to **SVG** or **PNG**.
 
 ### Saving
 Your work autosaves to the browser. Use **Save** to download a `.json` project file

@@ -131,18 +131,42 @@ const Charts = (function () {
     return s;
   }
 
-  // significance brackets above plot. sig:[{i,j,label}] referencing x-centers cx[]
-  function sigBrackets(f, cx, topAt, sig, color) {
+  // resolve significance-bracket appearance from opts.sigStyle, with back-compatible defaults
+  function sigStyleOf(opts) {
+    const st = (opts && opts.sigStyle) || {};
+    return {
+      notation: st.notation || 'stars',                                                  // 'stars' | 'pvalue' | 'psummary'
+      color: st.color || '#1c2733',
+      fontSize: st.fontSize != null && isFinite(+st.fontSize) ? +st.fontSize : 12.5,
+      bold: st.bold !== false,
+      showLine: st.showLine !== false,
+      lineWidth: st.lineWidth != null && isFinite(+st.lineWidth) ? +st.lineWidth : 1.2,
+    };
+  }
+  // label for one bracket from its p-value per the chosen notation; falls back to a
+  // pre-stored label (figures saved before p-values were retained) when p is absent.
+  function sigLabel(b, notation) {
+    const p = b.p;
+    if (p == null || isNaN(p)) return b.label != null ? String(b.label) : '';
+    if (notation === 'pvalue') return p < 0.0001 ? 'P < 0.0001' : p > 0.9999 ? 'P > 0.9999' : 'P = ' + (+p.toFixed(4));
+    if (notation === 'psummary') return p < 0.0001 ? 'P < 0.0001' : p < 0.001 ? 'P < 0.001' : p < 0.01 ? 'P < 0.01' : p < 0.05 ? 'P < 0.05' : 'ns';
+    return p < 0.0001 ? '****' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : 'ns';
+  }
+
+  // significance brackets above plot. sig:[{i,j,label,p?}] referencing x-centers cx[]
+  function sigBrackets(f, cx, topAt, sig, style) {
     if (!sig || !sig.length) return '';
-    let s = '';
-    let level = 0;
+    const st = style || sigStyleOf(null);
+    const weight = st.bold ? 600 : 400;
+    const h = 6, gap = st.fontSize + 9.5;   // stack spacing tracks text size (22 at the default)
+    let s = '', level = 0;
     const baseY = Math.min(...topAt) - 14;
     sig.forEach((b) => {
       const x1 = cx[b.i], x2 = cx[b.j];
-      const y = baseY - level * 22;
-      const h = 6;
-      s += `<path d="M${x1} ${y} L${x1} ${y - h} L${x2} ${y - h} L${x2} ${y}" fill="none" stroke="#1c2733" stroke-width="1.2"/>`;
-      s += `<text x="${(x1 + x2) / 2}" y="${y - h - 4}" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2733">${esc(b.label)}</text>`;
+      if (x1 == null || x2 == null) return;
+      const y = baseY - level * gap;
+      if (st.showLine) s += `<path d="M${x1} ${y} L${x1} ${y - h} L${x2} ${y - h} L${x2} ${y}" fill="none" stroke="${st.color}" stroke-width="${st.lineWidth}"/>`;
+      s += `<text x="${(x1 + x2) / 2}" y="${y - h - 4}" text-anchor="middle" font-size="${st.fontSize}" font-weight="${weight}" fill="${st.color}">${esc(sigLabel(b, st.notation))}</text>`;
       level++;
     });
     return s;
@@ -197,7 +221,7 @@ const Charts = (function () {
       tally(opts.showPoints ? st.values : [st.m], sc, t);
     });
     s += clipWrap(f, uid, marks);
-    s += sigBrackets(f, cx, tops, opts.sig);
+    s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
     s += catHits(f, n);
@@ -247,7 +271,7 @@ const Charts = (function () {
       tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
-    s += sigBrackets(f, cx, tops, opts.sig);
+    s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
     s += catHits(f, n);
@@ -291,7 +315,7 @@ const Charts = (function () {
       tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
-    s += sigBrackets(f, cx, tops, opts.sig);
+    s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
     s += `<text x="${f.x1}" y="${f.H - 8}" text-anchor="end" font-size="10.5" fill="#8696a7">box: median &amp; IQR · whiskers: 1.5×IQR</text>`;
     s += noticeSVG(f, t);
     s += catHits(f, n);
@@ -478,12 +502,15 @@ const Charts = (function () {
       s += `<text x="${cx0}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(rowNames[i])}</text>`;
     }
     s += clipWrap(f, uid, marks);
-    // significance brackets within categories: sig=[{cat,ja,jb,label}]
+    // significance brackets within categories: sig=[{cat,ja,jb,label,p?}]
+    const gst = sigStyleOf(opts);
+    const gWeight = gst.bold ? 600 : 400;
     (opts.sig || []).forEach((g) => {
-      const x1 = barX[g.cat][g.ja], x2 = barX[g.cat][g.jb];
+      const row = barX[g.cat]; if (!row || row[g.ja] == null || row[g.jb] == null) return;
+      const x1 = row[g.ja], x2 = row[g.jb];
       const top = Math.min(sc.toY(cs[g.cat][g.ja].m + cs[g.cat][g.ja].err), sc.toY(cs[g.cat][g.jb].m + cs[g.cat][g.jb].err)) - 12;
-      s += `<path d="M${x1} ${top} L${x1} ${top - 5} L${x2} ${top - 5} L${x2} ${top}" fill="none" stroke="#1c2733" stroke-width="1.1"/>`;
-      s += `<text x="${(x1 + x2) / 2}" y="${top - 8}" text-anchor="middle" font-size="12" font-weight="600" fill="#1c2733">${esc(g.label)}</text>`;
+      if (gst.showLine) s += `<path d="M${x1} ${top} L${x1} ${top - 5} L${x2} ${top - 5} L${x2} ${top}" fill="none" stroke="${gst.color}" stroke-width="${gst.lineWidth}"/>`;
+      s += `<text x="${(x1 + x2) / 2}" y="${top - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(g, gst.notation))}</text>`;
     });
     // legend
     colNames.forEach((cn, j) => { const col = colors[j % colors.length]; const lx = f.x1 - 118, ly = f.y0 + 12 + j * 17; s += `<rect x="${lx}" y="${ly - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" stroke="${col}"/>`; s += `<text x="${lx + 18}" y="${ly + 2}" font-size="11.5" fill="#1c2733">${esc(cn)}</text>`; });
@@ -513,7 +540,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks };
+  return { PALETTE, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;

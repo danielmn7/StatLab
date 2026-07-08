@@ -671,7 +671,7 @@
 
     if (kind === 'unpaired-t') {
       const [a, b] = groups; const r = T.unpairedT(a.values, b.values, spec.welch);
-      const sg = [{ i: 0, j: 1, label: stars(r.p) }];
+      const sg = [{ i: 0, j: 1, label: stars(r.p), p: r.p }];
       const node = card(r.test + ` — ${a.name} vs ${b.name}`,
         verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([
@@ -700,7 +700,7 @@
         verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([['Mann-Whitney U', num(r.U, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], ['P value (two-tailed)', fmtP(r.p)]]),
         el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value (small sample, no ties).' : 'Normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
-      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, label: stars(r.p) }] }));
+      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, label: stars(r.p), p: r.p }] }));
     }
 
     if (kind === 'wilcoxon') {
@@ -926,7 +926,7 @@
   }
   function sigFromPosthoc(ph, groups) {
     const idx = {}; groups.forEach((g, i) => { idx[g.name] = i; });
-    return ph.comparisons.filter((c) => c.sig).map((c) => ({ i: idx[c.a], j: idx[c.b], label: stars(c.p) })).filter((s) => s.i != null && s.j != null).slice(0, 6);
+    return ph.comparisons.filter((c) => c.sig).map((c) => ({ i: idx[c.a], j: idx[c.b], label: stars(c.p), p: c.p })).filter((s) => s.i != null && s.j != null).slice(0, 6);
   }
   function twoWayPosthocTable(ph) {
     const t = el('table', { class: 'stats' });
@@ -946,7 +946,7 @@
     if (dir !== 'colsWithinRow') return [];
     const rIdx = {}; cm.rowNames.forEach((r, i) => { rIdx[r] = i; });
     const cIdx = {}; cm.colNames.forEach((c, j) => { cIdx[c] = j; });
-    return ph.comparisons.filter((c) => c.sig).map((c) => ({ cat: rIdx[c.within], ja: cIdx[c.a], jb: cIdx[c.b], label: stars(c.p) })).filter((s) => s.cat != null && s.ja != null && s.jb != null).slice(0, 8);
+    return ph.comparisons.filter((c) => c.sig).map((c) => ({ cat: rIdx[c.within], ja: cIdx[c.a], jb: cIdx[c.b], label: stars(c.p), p: c.p })).filter((s) => s.cat != null && s.ja != null && s.jb != null).slice(0, 8);
   }
   function residualNormalityNote(cells) {
     const res = [];
@@ -1088,6 +1088,21 @@
         sw.append(el('input', { type: 'color', value: toHex(o.colors[i % o.colors.length]), title: nm, oninput: (e) => { o.colors[i] = e.target.value; rerender(); } }));
       });
       controls.append(ctrlGroup('Colors', sw));
+    }
+    // significance-bracket appearance (only when the figure actually has brackets)
+    if (o.sig && o.sig.length && ['bar', 'dot', 'box', 'grouped'].includes(ct)) {
+      o.sigStyle = o.sigStyle || {};
+      const ss = o.sigStyle, eff = Charts.sigStyleOf(o);
+      controls.append(ctrlGroup('Significance labels', el('select', { onchange: (e) => { ss.notation = e.target.value; rerender(); } },
+        ...[['stars', 'Asterisks (*, **, ***)'], ['pvalue', 'Exact P value'], ['psummary', 'P < threshold']].map(([v, t]) => el('option', { value: v, selected: eff.notation === v }, t)))));
+      const colorSw = el('div', { class: 'swatch' }, el('input', { type: 'color', value: toHex(eff.color), title: 'Label & bracket color', oninput: (e) => { ss.color = e.target.value; rerender(); } }));
+      controls.append(ctrlGroup('Significance color', colorSw));
+      controls.append(ctrlGroup('Text size (px)', el('input', { type: 'number', min: '8', max: '30', step: '0.5', value: eff.fontSize, oninput: (e) => { const v = parseFloat(e.target.value); if (isFinite(v)) { ss.fontSize = v; rerender(); } } })));
+      controls.append(ctrlGroup('', checkbox('Bold labels', eff.bold, (v) => { ss.bold = v; rerender(); })));
+      const thick = ctrlGroup('Bracket thickness', el('input', { type: 'number', min: '0.5', max: '4', step: '0.1', value: eff.lineWidth, oninput: (e) => { const v = parseFloat(e.target.value); if (isFinite(v)) { ss.lineWidth = v; rerender(); } } }));
+      thick.style.display = eff.showLine ? '' : 'none';
+      controls.append(ctrlGroup('', checkbox('Show connecting bracket', eff.showLine, (v) => { ss.showLine = v; thick.style.display = v ? '' : 'none'; rerender(); })));
+      controls.append(thick);
     }
     // reorder categories (drag chips; also draggable directly on bar/dot/box charts)
     if (['bar', 'dot', 'box'].includes(ct) && graph.spec.groups && graph.spec.groups.length > 1)
