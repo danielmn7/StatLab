@@ -625,7 +625,14 @@ const Charts = (function () {
 
   // ---- 7. grouped bar (two-way): categories = rows, bars within = column groups ----
   function groupedBar(cells, rowNames, colNames, opts = {}) {
-    const f = frame(Object.assign({ margin: { top: 46, right: 24, bottom: 64, left: 70 } }, opts));
+    // significance brackets can stack (cross-cluster comparisons such as rows-within-column
+    // or cell-vs-cell often overlap in x); reserve extra top headroom so the stack has room.
+    // A single bracket fits the default margin, so that case is left pixel-identical.
+    const gst = sigStyleOf(opts);
+    const sigRow = gst.fontSize + 9;
+    const nSig = (opts.sig || []).filter((g) => g.on !== false).length;
+    const sigHead = nSig > 1 ? Math.min(nSig - 1, 6) * sigRow : 0;
+    const f = frame(Object.assign({ margin: { top: 46 + sigHead, right: 24, bottom: 64, left: 70 } }, opts));
     const colors = opts.colors || PALETTE;
     const errType = opts.errorType || 'sem';
     const a = rowNames.length, b = colNames.length;
@@ -666,15 +673,32 @@ const Charts = (function () {
       s += `<text x="${cx0}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(rowNames[i])}</text>`;
     }
     s += clipWrap(f, uid, marks);
-    // significance brackets within categories: sig=[{cat,ja,jb,label,p?}]
-    const gst = sigStyleOf(opts);
+    // significance brackets. Each endpoint is one bar; a bracket joins two bars in the same
+    // category (columns within a row: {ca,ja,cb,jb} with ca===cb) or across categories (rows
+    // within a column, or any cell vs any cell). Legacy figures used {cat,ja,jb}. The bracket
+    // clears every bar under its span (not just the two endpoints), and brackets that overlap
+    // in x are stacked upward so multiple comparisons stay legible.
     const gWeight = gst.bold ? 600 : 400;
+    const barTop = (i, j) => { const c = cs[i] && cs[i][j]; return (c && !c.empty) ? sc.toY(c.m + Math.max(0, c.err)) : null; };
+    const brackets = [];
     (opts.sig || []).filter((g) => g.on !== false).forEach((g) => {
-      const row = barX[g.cat]; if (!row || row[g.ja] == null || row[g.jb] == null) return;
-      const x1 = row[g.ja], x2 = row[g.jb];
-      const top = Math.min(sc.toY(cs[g.cat][g.ja].m + cs[g.cat][g.ja].err), sc.toY(cs[g.cat][g.jb].m + cs[g.cat][g.jb].err)) - 12;
-      if (gst.showLine) s += `<path d="M${x1} ${top} L${x1} ${top - 5} L${x2} ${top - 5} L${x2} ${top}" fill="none" stroke="${gst.color}" stroke-width="${gst.lineWidth}"/>`;
-      s += `<text x="${(x1 + x2) / 2}" y="${top - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(g, gst.notation))}</text>`;
+      const iA = g.ca != null ? g.ca : g.cat, iB = g.cb != null ? g.cb : g.cat;
+      const rowA = barX[iA], rowB = barX[iB];
+      if (!rowA || !rowB || rowA[g.ja] == null || rowB[g.jb] == null) return;
+      const xL = Math.min(rowA[g.ja], rowB[g.jb]), xR = Math.max(rowA[g.ja], rowB[g.jb]);
+      let clear = Infinity;
+      for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) { const bx = barX[i][j]; if (bx >= xL - 0.5 && bx <= xR + 0.5) { const ty = barTop(i, j); if (ty != null) clear = Math.min(clear, ty); } }
+      if (!isFinite(clear)) clear = sc.toY(baseVal(sc));
+      brackets.push({ g, xL, xR, base: clear - 12 });
+    });
+    brackets.sort((p, q) => (p.xR - p.xL) - (q.xR - q.xL)); // narrow brackets sit low; wider ones stack above
+    const placed = [];
+    brackets.forEach((bk) => {
+      let y = bk.base;
+      placed.forEach((p) => { if (bk.xR >= p.xL - 0.5 && bk.xL <= p.xR + 0.5) y = Math.min(y, p.y - sigRow); });
+      placed.push({ xL: bk.xL, xR: bk.xR, y });
+      if (gst.showLine) s += `<path d="M${bk.xL} ${y} L${bk.xL} ${y - 5} L${bk.xR} ${y - 5} L${bk.xR} ${y}" fill="none" stroke="${gst.color}" stroke-width="${gst.lineWidth}"/>`;
+      s += `<text x="${(bk.xL + bk.xR) / 2}" y="${y - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(bk.g, gst.notation))}</text>`;
     });
     // legend
     colNames.forEach((cn, j) => { const col = colors[j % colors.length]; const lx = f.x1 - 118, ly = f.y0 + 12 + j * 17; s += `<rect x="${lx}" y="${ly - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" stroke="${col}"/>`; s += `<text x="${lx + 18}" y="${ly + 2}" font-size="11.5" fill="#1c2733">${esc(cn)}</text>`; });

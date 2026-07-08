@@ -603,9 +603,13 @@ const StatTests = (function (C) {
     const { cellMeans, cellN, colNames, rowNames, residual, a, b } = model;
     const msE = residual.ms, dfE = residual.df;
     const comps = [];
-    const add = (within, an, bn, diff, se, groups) => {
+    // cellA/cellB are the [row, col] indices of the two cells being compared, when the
+    // comparison is between individual cells (simple effects / cell-vs-cell). They let the
+    // grouped-bar figure locate the exact bars to bracket. Marginal-mean comparisons
+    // (main effects) leave them undefined — no single bar represents a marginal mean.
+    const add = (within, an, bn, diff, se, groups, cellA, cellB) => {
       if (!(se > 0) || !isFinite(diff)) return;
-      comps.push({ within, a: an, b: bn, diff, se, t: diff / se, groups });
+      comps.push({ within, a: an, b: bn, diff, se, t: diff / se, groups, cellA, cellB });
     };
     // Estimated marginal mean over a set of cells (equal weight per present cell)
     // and the variance of that mean from the pooled error MS. Cells are independent,
@@ -620,14 +624,14 @@ const StatTests = (function (C) {
         if (!cellN[i][j] || !cellN[i][k]) continue;
         const diff = cellMeans[i][j] - cellMeans[i][k];
         const se = Math.sqrt(msE * (1 / cellN[i][j] + 1 / cellN[i][k]));
-        add(rowNames[i], colNames[j], colNames[k], diff, se, b);
+        add(rowNames[i], colNames[j], colNames[k], diff, se, b, [i, j], [i, k]);
       }
     } else if (direction === 'rowsWithinCol') {
       for (let j = 0; j < b; j++) for (let i = 0; i < a; i++) for (let k = i + 1; k < a; k++) {
         if (!cellN[i][j] || !cellN[k][j]) continue;
         const diff = cellMeans[i][j] - cellMeans[k][j];
         const se = Math.sqrt(msE * (1 / cellN[i][j] + 1 / cellN[k][j]));
-        add(colNames[j], rowNames[i], rowNames[k], diff, se, a);
+        add(colNames[j], rowNames[i], rowNames[k], diff, se, a, [i, j], [k, j]);
       }
     } else if (direction === 'colMeans') {
       const M = [];
@@ -651,7 +655,7 @@ const StatTests = (function (C) {
         const [i1, j1] = flat[x], [i2, j2] = flat[y];
         const diff = cellMeans[i1][j1] - cellMeans[i2][j2];
         const se = Math.sqrt(msE * (1 / cellN[i1][j1] + 1 / cellN[i2][j2]));
-        add('—', rowNames[i1] + ' · ' + colNames[j1], rowNames[i2] + ' · ' + colNames[j2], diff, se, g);
+        add('—', rowNames[i1] + ' · ' + colNames[j1], rowNames[i2] + ' · ' + colNames[j2], diff, se, g, [i1, j1], [i2, j2]);
       }
     }
     const m = comps.length;
