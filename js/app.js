@@ -677,7 +677,7 @@
 
     if (kind === 'unpaired-t') {
       const [a, b] = groups; const r = T.unpairedT(a.values, b.values, spec.welch);
-      const sg = [{ i: 0, j: 1, label: stars(r.p), p: r.p }];
+      const sg = [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }];
       const node = card(r.test + ` — ${a.name} vs ${b.name}`,
         verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([
@@ -706,7 +706,7 @@
         verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([['Mann-Whitney U', num(r.U, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], ['P value (two-tailed)', fmtP(r.p)]]),
         el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value (small sample, no ties).' : 'Normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
-      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, label: stars(r.p), p: r.p }] }));
+      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }] }));
     }
 
     if (kind === 'wilcoxon') {
@@ -937,9 +937,16 @@
     });
     t.append(tb); return t;
   }
+  // Every post-hoc comparison becomes a candidate bracket. Significant ones are shown
+  // by default (capped so a busy figure isn't flooded); the rest ride along with on:false
+  // so the graph's "Comparisons shown" list can toggle any of them. See renderGraphView.
   function sigFromPosthoc(ph, groups) {
     const idx = {}; groups.forEach((g, i) => { idx[g.name] = i; });
-    return ph.comparisons.filter((c) => c.sig).map((c) => ({ i: idx[c.a], j: idx[c.b], label: stars(c.p), p: c.p })).filter((s) => s.i != null && s.j != null).slice(0, 6);
+    let shown = 0;
+    return ph.comparisons
+      .map((c) => ({ i: idx[c.a], j: idx[c.b], name: `${c.a} vs ${c.b}`, label: stars(c.p), p: c.p, sig: !!c.sig }))
+      .filter((s) => s.i != null && s.j != null)
+      .map((s) => { const on = s.sig && shown < 6; if (on) shown++; return Object.assign(s, { on }); });
   }
   function twoWayPosthocTable(ph) {
     const t = el('table', { class: 'stats' });
@@ -964,7 +971,11 @@
     if (dir !== 'colsWithinRow') return [];
     const rIdx = {}; cm.rowNames.forEach((r, i) => { rIdx[r] = i; });
     const cIdx = {}; cm.colNames.forEach((c, j) => { cIdx[c] = j; });
-    return ph.comparisons.filter((c) => c.sig).map((c) => ({ cat: rIdx[c.within], ja: cIdx[c.a], jb: cIdx[c.b], label: stars(c.p), p: c.p })).filter((s) => s.cat != null && s.ja != null && s.jb != null).slice(0, 8);
+    let shown = 0;
+    return ph.comparisons
+      .map((c) => ({ cat: rIdx[c.within], ja: cIdx[c.a], jb: cIdx[c.b], name: `${c.within}: ${c.a} vs ${c.b}`, label: stars(c.p), p: c.p, sig: !!c.sig }))
+      .filter((s) => s.cat != null && s.ja != null && s.jb != null)
+      .map((s) => { const on = s.sig && shown < 8; if (on) shown++; return Object.assign(s, { on }); });
   }
   function residualNormalityNote(cells) {
     const res = [];
@@ -1109,8 +1120,10 @@
       });
       controls.append(ctrlGroup('Colors', sw));
     }
-    // significance-bracket appearance (only when the figure actually has brackets)
+    // significance brackets: pick which comparisons appear, then style them
     if (o.sig && o.sig.length && ['bar', 'dot', 'box', 'grouped'].includes(ct)) {
+      controls.append(ctrlGroup('Comparisons shown', sigChecklist(graph.spec, rerender)));
+      if (o.sig.length > 1) controls.append(el('div', { class: 'ctrl-note' }, 'Tick a comparison to draw its significance bracket on the figure.'));
       o.sigStyle = o.sigStyle || {};
       const ss = o.sigStyle, eff = Charts.sigStyleOf(o);
       controls.append(ctrlGroup('Significance labels', el('select', { onchange: (e) => { ss.notation = e.target.value; rerender(); } },
@@ -1136,6 +1149,32 @@
   }
   function ctrlGroup(label, control) { return el('div', { class: 'ctrl-group' }, label ? el('label', {}, label) : null, control); }
   function checkbox(label, checked, on) { const c = el('input', { type: 'checkbox', onchange: (e) => on(e.target.checked) }); if (checked) c.checked = true; return el('label', { class: 'ctrl-row' }, c, label); }
+  // Checklist of every candidate significance comparison; ticking one draws its bracket
+  // (charts.js hides entries with on:false). Handles column charts (i/j group indices)
+  // and grouped bars (cat/ja/jb), and figures saved before names existed (falls back to
+  // positions). Toggling only re-renders the SVG, so the box is left scrollable & compact.
+  function sigChecklist(spec, rerender) {
+    const o = spec.opts, grouped = spec.chartType === 'grouped';
+    const nameOf = (b) => {
+      if (b.name) return b.name;
+      if (grouped) {
+        const rn = (spec.rowNames || [])[b.cat], ca = (spec.colNames || [])[b.ja], cb = (spec.colNames || [])[b.jb];
+        return `${rn != null ? rn + ': ' : ''}${ca != null ? ca : '#' + (b.ja + 1)} vs ${cb != null ? cb : '#' + (b.jb + 1)}`;
+      }
+      const ga = (spec.groups || [])[b.i], gb = (spec.groups || [])[b.j];
+      return `${ga ? ga.name : '#' + (b.i + 1)} vs ${gb ? gb.name : '#' + (b.j + 1)}`;
+    };
+    const box = el('div', { class: 'sig-list' });
+    o.sig.forEach((b) => {
+      const cb = el('input', { type: 'checkbox', onchange: (e) => { b.on = e.target.checked; rerender(); } });
+      if (b.on !== false) cb.checked = true;
+      const nm = nameOf(b), badge = b.p != null ? stars(b.p) : (b.label || '');
+      box.append(el('label', { class: 'sig-item', title: nm },
+        cb, el('span', { class: 'sig-name' }, nm),
+        el('span', { class: 'sig-badge' + (b.sig ? ' is-sig' : '') }, badge)));
+    });
+    return box;
+  }
   function toHex(c) { if (/^#/.test(c)) return c; return '#0d9488'; }
   function numInput(val, ph, on) { return el('input', { type: 'number', step: 'any', placeholder: ph, value: (val === 0 || val) ? val : '', oninput: (e) => on(e.target.value.trim()) }); }
   // one labeled group: Auto-range checkbox → reveals Min/Max, plus optional Log + Scientific-notation toggles
