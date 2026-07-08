@@ -67,6 +67,28 @@ const mu = T.twoWayANOVA(cu, ['P', 'Q'], ['W', 'K']);
 const mt = T.twoWayANOVA(ct, ['W', 'K'], ['P', 'Q']);
 chk('2way Type III order-invariant', mu.effects[0].F, mt.effects[1].F, 1e-9);
 
+// --- Two-way ANOVA post-hoc directions ---
+// Balanced 2x2, n=2: F_col=36, F_row=100 (msE=0.5). For a factor with exactly 2
+// levels, the marginal-means comparison must satisfy t^2 == F (independent paths).
+const twm = T.twoWayANOVA([[[1, 2], [3, 4]], [[5, 6], [9, 10]]], ['R1', 'R2'], ['C1', 'C2']);
+const cmean = T.twoWayPosthoc(twm, 'sidak', 'colMeans');
+chk('2way colMeans count (2 cols)', cmean.comparisons.length, 1, 1e-12);
+chk('2way colMeans t^2 == F_col', cmean.comparisons[0].t ** 2, twm.effects[1].F, 1e-9);
+const rmean = T.twoWayPosthoc(twm, 'sidak', 'rowMeans');
+chk('2way rowMeans t^2 == F_row', rmean.comparisons[0].t ** 2, twm.effects[0].F, 1e-9);
+const cellcmp = T.twoWayPosthoc(twm, 'tukey', 'cells');
+chk('2way cells count == C(4,2)', cellcmp.comparisons.length, 6, 1e-12);
+// Simple-effect within-row raw t matches direct pooled-error t (C1 vs C2 in R1)
+const cwr = T.twoWayPosthoc(twm, 'bonferroni', 'colsWithinRow');
+chk('2way simple-effect count', cwr.comparisons.length, 2, 1e-12);
+chk('2way within-row raw t (R1)', cwr.comparisons[0].t, (1.5 - 3.5) / Math.sqrt(0.5 * (1 / 2 + 1 / 2)), 1e-9);
+// 2x3 balanced: colMeans compares 3 marginal means -> C(3,2)=3 comparisons
+const tw3 = T.twoWayANOVA([[[1, 2], [3, 4], [5, 6]], [[2, 3], [4, 5], [7, 8]]], ['R1', 'R2'], ['C1', 'C2', 'C3']);
+chk('2way colMeans count (3 cols)', T.twoWayPosthoc(tw3, 'sidak', 'colMeans').comparisons.length, 3, 1e-12);
+// Single Bonferroni comparison (rowMeans, 2 rows) == raw two-tailed p
+chk('2way rowMeans single == raw', T.twoWayPosthoc(tw3, 'bonferroni', 'rowMeans').comparisons[0].p,
+  T.twoWayPosthoc(tw3, 'bonferroni', 'rowMeans').comparisons[0].pRaw, 1e-12);
+
 // --- Scheirer-Ray-Hare: MS_total of ranks == N(N+1)/12 when tie-free ---
 const srh = T.scheirerRayHare([[[1, 2, 3], [10, 11, 12]], [[4, 5, 6], [20, 21, 22]]], ['R1', 'R2'], ['C1', 'C2']);
 chk('SRH msTotal identity (tie-free)', srh.msTotal, srh.N * (srh.N + 1) / 12, 1e-9);

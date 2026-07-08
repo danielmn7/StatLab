@@ -603,19 +603,55 @@ const StatTests = (function (C) {
     const { cellMeans, cellN, colNames, rowNames, residual, a, b } = model;
     const msE = residual.ms, dfE = residual.df;
     const comps = [];
+    const add = (within, an, bn, diff, se, groups) => {
+      if (!(se > 0) || !isFinite(diff)) return;
+      comps.push({ within, a: an, b: bn, diff, se, t: diff / se, groups });
+    };
+    // Estimated marginal mean over a set of cells (equal weight per present cell)
+    // and the variance of that mean from the pooled error MS. Cells are independent,
+    // so Var(marginal_j − marginal_k) = Var(marginal_j) + Var(marginal_k).
+    const marginal = (idxs) => {
+      let sum = 0, varr = 0, cnt = 0;
+      for (const [i, j] of idxs) { if (!cellN[i][j]) continue; sum += cellMeans[i][j]; varr += msE / cellN[i][j]; cnt++; }
+      return cnt ? { mean: sum / cnt, varr: varr / (cnt * cnt) } : null;
+    };
     if (direction === 'colsWithinRow') {
       for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) for (let k = j + 1; k < b; k++) {
         if (!cellN[i][j] || !cellN[i][k]) continue;
         const diff = cellMeans[i][j] - cellMeans[i][k];
         const se = Math.sqrt(msE * (1 / cellN[i][j] + 1 / cellN[i][k]));
-        comps.push({ within: rowNames[i], a: colNames[j], b: colNames[k], diff, se, t: diff / se, groups: b });
+        add(rowNames[i], colNames[j], colNames[k], diff, se, b);
       }
-    } else {
+    } else if (direction === 'rowsWithinCol') {
       for (let j = 0; j < b; j++) for (let i = 0; i < a; i++) for (let k = i + 1; k < a; k++) {
         if (!cellN[i][j] || !cellN[k][j]) continue;
         const diff = cellMeans[i][j] - cellMeans[k][j];
         const se = Math.sqrt(msE * (1 / cellN[i][j] + 1 / cellN[k][j]));
-        comps.push({ within: colNames[j], a: rowNames[i], b: rowNames[k], diff, se, t: diff / se, groups: a });
+        add(colNames[j], rowNames[i], rowNames[k], diff, se, a);
+      }
+    } else if (direction === 'colMeans') {
+      const M = [];
+      for (let j = 0; j < b; j++) M[j] = marginal(Array.from({ length: a }, (_, i) => [i, j]));
+      for (let j = 0; j < b; j++) for (let k = j + 1; k < b; k++) {
+        if (!M[j] || !M[k]) continue;
+        add('—', colNames[j], colNames[k], M[j].mean - M[k].mean, Math.sqrt(M[j].varr + M[k].varr), b);
+      }
+    } else if (direction === 'rowMeans') {
+      const M = [];
+      for (let i = 0; i < a; i++) M[i] = marginal(Array.from({ length: b }, (_, j) => [i, j]));
+      for (let i = 0; i < a; i++) for (let k = i + 1; k < a; k++) {
+        if (!M[i] || !M[k]) continue;
+        add('—', rowNames[i], rowNames[k], M[i].mean - M[k].mean, Math.sqrt(M[i].varr + M[k].varr), a);
+      }
+    } else { // 'cells' — every cell mean vs every other cell mean
+      const flat = [];
+      for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) if (cellN[i][j]) flat.push([i, j]);
+      const g = flat.length;
+      for (let x = 0; x < flat.length; x++) for (let y = x + 1; y < flat.length; y++) {
+        const [i1, j1] = flat[x], [i2, j2] = flat[y];
+        const diff = cellMeans[i1][j1] - cellMeans[i2][j2];
+        const se = Math.sqrt(msE * (1 / cellN[i1][j1] + 1 / cellN[i2][j2]));
+        add('—', rowNames[i1] + ' · ' + colNames[j1], rowNames[i2] + ' · ' + colNames[j2], diff, se, g);
       }
     }
     const m = comps.length;
