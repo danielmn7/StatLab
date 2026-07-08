@@ -42,6 +42,16 @@ const Charts = (function () {
     return (+v.toPrecision(4)).toString();
   }
   const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const escAttr = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  // most-frequent value(s); null when every value is unique (no meaningful mode)
+  function modeOf(a) {
+    const counts = new Map();
+    a.forEach((v) => counts.set(v, (counts.get(v) || 0) + 1));
+    let bestC = 0; counts.forEach((c) => { if (c > bestC) bestC = c; });
+    if (bestC <= 1) return null;
+    const modes = []; counts.forEach((c, v) => { if (c === bestC) modes.push(v); });
+    return modes.sort((x, y) => x - y);
+  }
 
   // ---- shared frame ----
   function frame(opts) {
@@ -124,11 +134,21 @@ const Charts = (function () {
     if (t.out) lines.push(`⚠ ${t.out} value${t.out > 1 ? 's' : ''} outside axis range not shown`);
     return lines.map((tx, i) => `<text x="${f.x0}" y="${f.H - 8 - (lines.length - 1 - i) * 13}" font-size="10.5" fill="#b45309">${esc(tx)}</text>`).join('');
   }
-  // transparent per-category drag handles / drop targets (categorical charts)
-  function catHits(f, n) {
+  // transparent per-category drag handles / drop targets (categorical charts).
+  // tips[i], when given, adds hover-tooltip data-* attributes to that category's rect.
+  function catHits(f, n, tips) {
     const slot = f.pw / n; let s = '';
-    for (let i = 0; i < n; i++) s += `<rect class="cat-hit" data-i="${i}" x="${f.x0 + slot * i}" y="${f.y0}" width="${slot}" height="${f.ph}" fill="transparent" style="cursor:grab"/>`;
+    for (let i = 0; i < n; i++) s += `<rect class="cat-hit" data-i="${i}"${(tips && tips[i]) ? ' ' + tips[i] : ''} x="${f.x0 + slot * i}" y="${f.y0}" width="${slot}" height="${f.ph}" fill="transparent" style="cursor:grab"/>`;
     return s;
+  }
+  // per-bar hover stats (mean/median/mode/range) encoded as data-* attributes read by the app
+  function statTip(name, values) {
+    const s = values.slice().sort((a, b) => a - b);
+    const md = modeOf(values);
+    const modeStr = md == null ? '—' : md.map(fmt).join(', ');
+    return `data-tip="1" data-name="${escAttr(name)}" data-n="${values.length}"` +
+      ` data-mean="${fmt(mean(values))}" data-median="${fmt(quantile(s, 0.5))}"` +
+      ` data-mode="${escAttr(modeStr)}" data-range="${fmt(s[0])} – ${fmt(s[s.length - 1])}"`;
   }
 
   // resolve significance-bracket appearance from opts.sigStyle, with back-compatible defaults
@@ -190,6 +210,7 @@ const Charts = (function () {
     const uid = ++_uid;
     const n = groups.length;
     const slot = f.pw / n, bw = Math.min(58, slot * 0.6);
+    const barFill = opts.showPoints ? 0.5 : 0.82;   // dim the bar when points overlay it so they read clearly
     let s = open(f, opts.title);
     // zero line / y axis
     s += yAxis(f, sc, opts.yLabel || 'Value');
@@ -202,7 +223,7 @@ const Charts = (function () {
       cx.push(x);
       const yTop = sc.toY(st.m), yBase = sc.toY(baseVal(sc));
       const col = colors[i % colors.length];
-      marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="0.82" stroke="${col}" stroke-width="1.2" rx="1.5"/>`;
+      marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" stroke="${col}" stroke-width="1.2" rx="1.5"/>`;
       // error bar
       if (st.err > 0) {
         const yhi = sc.toY(st.m + st.err), ylo = sc.toY(st.m - st.err);
@@ -214,7 +235,7 @@ const Charts = (function () {
       // points
       if (opts.showPoints) {
         let seed = i * 99 + 7;
-        st.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; marks += `<circle cx="${x + j}" cy="${sc.toY(v)}" r="3" fill="#1c2733" fill-opacity="0.55"/>`; });
+        st.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; marks += `<circle cx="${x + j}" cy="${sc.toY(v)}" r="3.1" fill="#1c2733" fill-opacity="0.9" stroke="#ffffff" stroke-width="0.8"/>`; });
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(st.name)}</text>`;
@@ -224,7 +245,7 @@ const Charts = (function () {
     s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
-    s += catHits(f, n);
+    s += catHits(f, n, stats.map((st) => statTip(st.name, st.values)));
     s += '</svg>';
     return s;
   }

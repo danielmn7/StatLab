@@ -1069,6 +1069,7 @@
       refresh();
     }
     if (['bar', 'dot', 'box'].includes(ct)) enableCatDrag(canvas, reorderGroups);
+    enableBarTooltip(canvas);
 
     // chart type (depends on data)
     const types = graph.spec.chartType === 'survival' ? [['survival', 'Survival curve']]
@@ -1084,6 +1085,7 @@
     }
     if (graph.spec.chartType === 'bar') {
       controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints, (v) => { o.showPoints = v; rerender(); })));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Tip: hover any bar to see its mean, median, mode & range.'));
     }
     if (graph.spec.chartType === 'survival') {
       controls.append(ctrlGroup('', checkbox('Show 95% CI bands', o.showCI, (v) => { o.showCI = v; rerender(); })));
@@ -1179,6 +1181,35 @@
       };
       document.addEventListener('mouseup', up);
     });
+  }
+  // hover tooltip for bar charts — mean / median / mode / range per group, at a glance.
+  // Reads data-* attributes off the transparent .cat-hit rects emitted by Charts.barChart.
+  function enableBarTooltip(canvas) {
+    const ensureTip = () => {
+      let t = document.getElementById('chart-tip');
+      if (!t) { t = el('div', { class: 'chart-tip', id: 'chart-tip' }); document.body.appendChild(t); }
+      return t;
+    };
+    const hide = () => { const t = document.getElementById('chart-tip'); if (t) t.style.display = 'none'; };
+    canvas.addEventListener('mousemove', (e) => {
+      const hit = e.target.closest && e.target.closest('.cat-hit[data-tip]');
+      if (!hit || canvas.classList.contains('dragging')) { hide(); return; }
+      const d = hit.dataset;
+      const tip = ensureTip();
+      tip.innerHTML = '';
+      tip.append(el('div', { class: 'tip-title' }, d.name));
+      [['Mean', d.mean], ['Median', d.median], ['Mode', d.mode], ['Range', d.range], ['n', d.n]]
+        .forEach(([k, v]) => tip.append(el('div', { class: 'tip-row' }, el('span', {}, k), el('b', {}, v))));
+      tip.style.display = 'block';
+      const pad = 14, tw = tip.offsetWidth, th = tip.offsetHeight;
+      let left = e.clientX + pad, top = e.clientY + pad;
+      if (left + tw > window.innerWidth - 8) left = e.clientX - pad - tw;
+      if (top + th > window.innerHeight - 8) top = e.clientY - pad - th;
+      tip.style.left = Math.max(8, left) + 'px';
+      tip.style.top = Math.max(8, top) + 'px';
+    });
+    canvas.addEventListener('mouseleave', hide);
+    canvas.addEventListener('mousedown', hide);   // don't cover the chart while dragging to reorder
   }
 
   function exportSVG(graph) { download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
