@@ -1061,6 +1061,8 @@
       const idx = moveOrder(graph.spec.groups.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
       graph.spec.groups = moveArr(graph.spec.groups, idx);
       if (Array.isArray(o.colors)) o.colors = moveArr(o.colors, idx);
+      if (Array.isArray(o.markers)) o.markers = moveArr(o.markers, idx);
+      if (o.pointMarkers) o.pointMarkers = remapPointGroups(o.pointMarkers, inv);
       if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { i: inv[s.i], j: inv[s.j] }));
       refresh();
     }
@@ -1081,6 +1083,7 @@
     }
     if (['bar', 'dot', 'box'].includes(ct)) enableCatDrag(canvas, reorderGroups);
     enableBarTooltip(canvas);
+    if (['dot', 'bar', 'xy'].includes(ct)) enablePointSymbolEdit(canvas, graph, ct, refresh);
 
     // chart type (depends on data)
     const types = graph.spec.chartType === 'survival' ? [['survival', 'Survival curve']]
@@ -1127,7 +1130,7 @@
       });
       controls.append(ctrlGroup('Fine-tune colors', sw));
     }
-    // ---- point symbols (per-series marker shape) ----
+    // ---- point symbols (per-series marker shape, plus per-point overrides) ----
     if (ct === 'dot' || (ct === 'bar' && o.showPoints)) {
       o.markers = o.markers || [];
       const box = el('div', { class: 'marker-list' });
@@ -1137,12 +1140,16 @@
         box.append(el('div', { class: 'marker-row' }, el('span', { class: 'marker-name', title: g.name }, g.name), sel));
       });
       controls.append(ctrlGroup('Point symbols', box));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Double-click a single point on the figure to give that one replicate its own symbol.'));
+      appendCustomPointsNote(controls, o, refresh);
     }
     if (ct === 'xy') {
       controls.append(ctrlGroup('Point symbol', el('select', { onchange: (e) => { o.marker = e.target.value; rerender(); } },
         ...Charts.MARKERS.map(([v, t]) => el('option', { value: v, selected: (o.marker || 'circle') === v }, t)))));
       controls.append(ctrlGroup('Point color', el('div', { class: 'swatch' },
         el('input', { type: 'color', value: toHex(o.pointColor || '#2563eb'), title: 'Point color', oninput: (e) => { o.pointColor = e.target.value; rerender(); } }))));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Double-click a single point on the figure to give it its own symbol.'));
+      appendCustomPointsNote(controls, o, refresh);
     }
     // significance brackets: pick which comparisons appear, then style them
     if (o.sig && o.sig.length && ['bar', 'dot', 'box', 'grouped'].includes(ct)) {
@@ -1260,6 +1267,70 @@
       box.append(chip);
     });
     return box;
+  }
+  // remap per-point overrides ("group:index" → shape) after a category reorder
+  function remapPointGroups(pm, inv) {
+    const out = {};
+    for (const k in pm) { const s = k.split(':'); out[inv[+s[0]] + ':' + s[1]] = pm[k]; }
+    return out;
+  }
+  // small "N custom points · clear all" line under the point-symbol controls
+  function appendCustomPointsNote(controls, o, refresh) {
+    const n = o.pointMarkers ? Object.keys(o.pointMarkers).length : 0;
+    if (!n) return;
+    controls.append(el('div', { class: 'ctrl-note' }, `${n} custom point${n > 1 ? 's' : ''} · `,
+      el('span', { class: 'ctrl-link', onclick: () => { o.pointMarkers = {}; refresh(); } }, 'clear all')));
+  }
+  // double-click a single point to override its symbol. Hit-tests by nearest .data-point
+  // (charts.js stamps each point's group/index/coords) so overlays don't block it.
+  function enablePointSymbolEdit(canvas, graph, ct, refresh) {
+    canvas.addEventListener('dblclick', (ev) => {
+      const hit = pointAt(canvas, ev);
+      if (!hit) return;
+      ev.preventDefault();
+      const pg = +hit.getAttribute('data-pg'), pi = +hit.getAttribute('data-pi'), key = pg + ':' + pi;
+      const o = graph.spec.opts; o.pointMarkers = o.pointMarkers || {};
+      const g = graph.spec.groups && graph.spec.groups[pg];
+      const label = ct === 'xy' ? `Point ${pi + 1}` : `${g ? g.name : 'Group ' + (pg + 1)} · point ${pi + 1}`;
+      openPointSymbolMenu(ev.clientX, ev.clientY, o.pointMarkers[key] || null, label, (shape) => {
+        if (shape) o.pointMarkers[key] = shape; else delete o.pointMarkers[key];
+        refresh();
+      });
+    });
+  }
+  // nearest data point (in SVG user units) to the click, or null if none is close
+  function pointAt(canvas, ev) {
+    const svg = canvas.querySelector('svg');
+    if (!svg || !svg.getScreenCTM) return null;
+    const pts = svg.querySelectorAll('.data-point');
+    if (!pts.length) return null;
+    const ctm = svg.getScreenCTM(); if (!ctm) return null;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
+    let best = null, bestD = Infinity;
+    pts.forEach((el2) => { const dx = +el2.getAttribute('data-px') - p.x, dy = +el2.getAttribute('data-py') - p.y; const d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = el2; } });
+    return bestD <= 16 * 16 ? best : null;
+  }
+  function closePointMenu() { const m = document.getElementById('pt-menu'); if (m) { if (m._cleanup) m._cleanup(); m.remove(); } }
+  // floating popup at (clientX,clientY): pick a shape for this one point, or reset it
+  function openPointSymbolMenu(clientX, clientY, current, label, onPick) {
+    closePointMenu();
+    const shapes = el('div', { class: 'pt-menu-shapes' },
+      ...Charts.MARKERS.map(([v, t]) => el('button', { class: 'pt-shape' + (current === v ? ' active' : ''), title: t, onclick: () => { onPick(v); closePointMenu(); } }, t.split(' ')[0])));
+    const menu = el('div', { class: 'pt-menu', id: 'pt-menu' },
+      el('div', { class: 'pt-menu-title' }, label),
+      shapes,
+      el('button', { class: 'pt-reset', onclick: () => { onPick(null); closePointMenu(); } }, '↺ Reset to series default'));
+    document.body.append(menu);
+    const pad = 10, mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let left = clientX + pad, top = clientY + pad;
+    if (left + mw > window.innerWidth - 8) left = clientX - pad - mw;
+    if (top + mh > window.innerHeight - 8) top = clientY - pad - mh;
+    menu.style.left = Math.max(8, left) + 'px';
+    menu.style.top = Math.max(8, top) + 'px';
+    const outside = (e) => { if (!menu.contains(e.target)) closePointMenu(); };
+    const esc = (e) => { if (e.key === 'Escape') closePointMenu(); };
+    menu._cleanup = () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc); };
+    setTimeout(() => { document.addEventListener('mousedown', outside); document.addEventListener('keydown', esc); }, 0);
   }
   // drag a category directly on the chart via the transparent .cat-hit rects
   function enableCatDrag(canvas, onMove) {

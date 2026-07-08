@@ -230,6 +230,17 @@ table.stats tr:last-child td { border-bottom: none; }
 .marker-row { display: flex; align-items: center; gap: 8px; }
 .marker-name { flex: 1; font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .marker-row select { flex-shrink: 0; width: 108px; padding: 5px 6px; border: 1px solid var(--line-strong); border-radius: 7px; font-family: inherit; font-size: 12.5px; }
+.ctrl-link { color: var(--accent-dark); cursor: pointer; text-decoration: underline; }
+.ctrl-link:hover { color: var(--accent); }
+/* double-click-a-point symbol menu */
+.pt-menu { position: fixed; z-index: 1100; min-width: 184px; padding: 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: var(--shadow-lg); }
+.pt-menu-title { font-size: 11.5px; font-weight: 650; color: var(--ink); margin-bottom: 8px; }
+.pt-menu-shapes { display: flex; gap: 5px; margin-bottom: 8px; }
+.pt-shape { flex: 1; height: 30px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; font-size: 15px; line-height: 1; color: var(--ink); cursor: pointer; }
+.pt-shape:hover { background: #eef2f7; }
+.pt-shape.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); }
+.pt-reset { display: block; width: 100%; padding: 5px; border: none; border-top: 1px solid var(--line); background: none; font-family: inherit; font-size: 12px; color: var(--ink-soft); cursor: pointer; }
+.pt-reset:hover { color: var(--accent-dark); }
 /* hover-stats tooltip for bar charts */
 .chart-tip {
   position: fixed; z-index: 1000; pointer-events: none; display: none;

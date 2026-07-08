@@ -60,22 +60,35 @@ const Charts = (function () {
   // Shape ids used by the figure "Point symbols" control.
   const MARKERS = [['circle', '● Circle'], ['square', '■ Square'], ['triangle', '▲ Triangle'], ['diamond', '◆ Diamond'], ['cross', '✕ Cross']];
   // SVG for one data-point marker centered at (cx,cy), sized to roughly match a
-  // radius-r circle. opt: {fill, stroke, fillOpacity, strokeWidth}. The open "cross"
-  // (×) has no fill and is stroked in the marker's fill color so it reads on any bg.
+  // radius-r circle. opt: {fill, stroke, fillOpacity, strokeWidth, attrs}. `attrs` is
+  // extra markup injected on the element (class + data-* so the app can hit-test the
+  // point for per-point editing). The open "cross" (×) has no fill and is stroked in
+  // the marker's fill color so it reads on any background.
   function markerSVG(cx, cy, r, shape, opt) {
     opt = opt || {};
     const fill = opt.fill || '#1c2733';
     const stroke = opt.stroke || fill;
     const fo = opt.fillOpacity != null ? opt.fillOpacity : 1;
     const sw = opt.strokeWidth != null ? opt.strokeWidth : 0.8;
+    const x = opt.attrs ? ' ' + opt.attrs : '';
     const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"`;
     switch (shape) {
-      case 'square': { const s = r * 1.78; return `<rect x="${(cx - s / 2).toFixed(2)}" y="${(cy - s / 2).toFixed(2)}" width="${s.toFixed(2)}" height="${s.toFixed(2)}" fill="${fill}" ${common}/>`; }
-      case 'triangle': { const h = r * 2.0; const p = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ${(cx - h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ${(cx + h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`; return `<polygon points="${p}" fill="${fill}" ${common}/>`; }
-      case 'diamond': { const d = r * 1.48; return `<polygon points="${cx.toFixed(2)},${(cy - d).toFixed(2)} ${(cx + d).toFixed(2)},${cy.toFixed(2)} ${cx.toFixed(2)},${(cy + d).toFixed(2)} ${(cx - d).toFixed(2)},${cy.toFixed(2)}" fill="${fill}" ${common}/>`; }
-      case 'cross': { const a = r * 1.2; return `<path d="M${(cx - a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx + a).toFixed(2)} ${(cy + a).toFixed(2)} M${(cx + a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx - a).toFixed(2)} ${(cy + a).toFixed(2)}" fill="none" stroke="${fill}" stroke-width="${Math.max(sw, 1.7).toFixed(2)}" stroke-linecap="round"/>`; }
-      default: return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${fill}" ${common}/>`;
+      case 'square': { const s = r * 1.78; return `<rect x="${(cx - s / 2).toFixed(2)}" y="${(cy - s / 2).toFixed(2)}" width="${s.toFixed(2)}" height="${s.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
+      case 'triangle': { const h = r * 2.0; const p = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ${(cx - h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ${(cx + h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`; return `<polygon points="${p}" fill="${fill}" ${common}${x}/>`; }
+      case 'diamond': { const d = r * 1.48; return `<polygon points="${cx.toFixed(2)},${(cy - d).toFixed(2)} ${(cx + d).toFixed(2)},${cy.toFixed(2)} ${cx.toFixed(2)},${(cy + d).toFixed(2)} ${(cx - d).toFixed(2)},${cy.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
+      case 'cross': { const a = r * 1.2; return `<path d="M${(cx - a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx + a).toFixed(2)} ${(cy + a).toFixed(2)} M${(cx + a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx - a).toFixed(2)} ${(cy + a).toFixed(2)}" fill="none" stroke="${fill}" stroke-width="${Math.max(sw, 1.7).toFixed(2)}" stroke-linecap="round"${x}/>`; }
+      default: return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${fill}" ${common}${x}/>`;
     }
+  }
+  // Per-point symbol resolution + hit-test metadata. A point is identified by
+  // "group:index"; opts.pointMarkers[key] (set by double-click) overrides the series
+  // default. ptAttrs stamps the class + coordinates the app reads to locate a point.
+  function ptShape(opts, g, vi, seriesShape) {
+    const pm = opts.pointMarkers; const k = g + ':' + vi;
+    return (pm && pm[k]) || seriesShape || 'circle';
+  }
+  function ptAttrs(g, vi, px, py) {
+    return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"`;
   }
 
   // ---- numeric helpers ----
@@ -320,9 +333,9 @@ const Charts = (function () {
       } else tops.push(yTop);
       // points
       if (opts.showPoints) {
-        const shape = (opts.markers && opts.markers[i]) || 'circle';
+        const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
         let seed = i * 99 + 7;
-        st.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; marks += markerSVG(x + j, sc.toY(v), 3.1, shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8 }); });
+        st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(st.name)}</text>`;
@@ -364,9 +377,9 @@ const Charts = (function () {
       const col = colors[i % colors.length];
       const m = mean(g.values), se = sem(g.values), sdv = sd(g.values);
       const err = errType === 'sem' ? se : errType === 'ci95' ? tcrit95(g.values.length - 1) * se : sdv;
-      const shape = (opts.markers && opts.markers[i]) || 'circle';
+      const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
       let seed = i * 131 + 17;
-      g.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * Math.min(46, slot * 0.5); marks += markerSVG(x + j, sc.toY(v), 3.6, shape, { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8 }); });
+      g.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * Math.min(46, slot * 0.5); const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.6, ptShape(opts, i, vi, seriesShape), { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       // mean line + error
       const wm = 22;
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
@@ -490,12 +503,13 @@ const Charts = (function () {
     }
     // points
     const ptFill = opts.pointColor || '#2563eb', ptStroke = opts.pointColor || '#1d4ed8';
-    const shape = opts.marker || 'circle';
+    const seriesShape = opts.marker || 'circle';
     const t = { log: 0, out: 0, logFail: (xAx.log && !scx.log) || (yAx.log && !sc.log) };
     for (let i = 0; i < xs.length; i++) {
       if ((scx.log && !(xs[i] > 0)) || (sc.log && !(ys[i] > 0))) { t.log++; continue; }
       if (xs[i] < scx.min - 1e-9 || xs[i] > scx.max + 1e-9 || ys[i] < sc.min - 1e-9 || ys[i] > sc.max + 1e-9) t.out++;
-      marks += markerSVG(scx.toX(xs[i]), sc.toY(ys[i]), 3.8, shape, { fill: ptFill, stroke: ptStroke, fillOpacity: 0.75, strokeWidth: 0.8 });
+      const px = scx.toX(xs[i]), py = sc.toY(ys[i]);
+      marks += markerSVG(px, py, 3.8, ptShape(opts, 0, i, seriesShape), { fill: ptFill, stroke: ptStroke, fillOpacity: 0.75, strokeWidth: 0.8, attrs: ptAttrs(0, i, px, py) });
     }
     s += clipWrap(f, uid, marks);
     if (opts.annotation) s += `<text x="${f.x0 + 10}" y="${f.y0 + 14}" font-size="11.5" fill="#5b6b7b">${esc(opts.annotation)}</text>`;
