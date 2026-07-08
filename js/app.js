@@ -405,6 +405,9 @@
       return [
         { kind: 'twoway', name: 'Two-way ANOVA', desc: 'Two factors + interaction + multiple comparisons', tag: 'Parametric', rec: true },
         { kind: 'srh', name: 'Scheirer-Ray-Hare', desc: 'Nonparametric two-way (rank-based)', tag: 'Rank-based' },
+        { kind: 'normality', name: 'Normality tests', desc: 'Shapiro-Wilk, D’Agostino, A-D', tag: 'Diagnostics' },
+        { kind: 'grubbs', name: "Grubbs' outlier test", desc: 'Detect extreme values', tag: 'Diagnostics' },
+        { kind: 'descriptive', name: 'Descriptive statistics', desc: 'Mean, SD, SEM, median, CI…', tag: 'Summary' },
       ];
     }
     const ng = table.groups().length;
@@ -601,9 +604,38 @@
       el('div', { class: 'result-body' }, ...body));
   }
 
+  // Reduce a grouped (two-way) table to named value-sets for column-style
+  // diagnostics (normality / outliers / descriptives). With replicates each
+  // row×column cell is its own experimental group; without replicates each
+  // dataset column is pooled across its rows.
+  function groupedUnits(table) {
+    const cm = table.cellsMatrix();
+    const out = [];
+    if (table.nsub > 1) {
+      for (let j = 0; j < cm.colNames.length; j++)
+        for (let i = 0; i < cm.rowNames.length; i++) {
+          const vals = cm.cells[i][j];
+          if (vals && vals.length) out.push({ name: cm.colNames[j] + ' · ' + cm.rowNames[i], values: vals.slice() });
+        }
+    } else {
+      for (let j = 0; j < cm.colNames.length; j++) {
+        const vals = [];
+        for (let i = 0; i < cm.rowNames.length; i++) { const c = cm.cells[i][j]; if (c && c.length) vals.push(c[0]); }
+        if (vals.length) out.push({ name: cm.colNames[j], values: vals });
+      }
+    }
+    return out;
+  }
+  function groupedUnitNote(table) {
+    if (table.type !== 'grouped') return null;
+    return el('div', { class: 'note' }, table.nsub > 1
+      ? 'Grouped table — each column × row cell (its replicate subcolumns) is analyzed as one group.'
+      : 'Grouped table — each dataset column is analyzed as one group (values pooled across rows).');
+  }
+
   function compute(table, spec) {
     const kind = spec.kind;
-    const groups = table.type === 'column' ? table.groups() : null;
+    const groups = table.type === 'column' ? table.groups() : (table.type === 'grouped' ? groupedUnits(table) : null);
     const wrap = (title, node, graphSpec) => ({ title, html: node, graphSpec });
 
     if (kind === 'descriptive') {
@@ -621,7 +653,8 @@
       tbl.append(tb);
       const node = card('Descriptive statistics', tbl,
         el('div', { class: 'section-label' }, 'Skewness & kurtosis'),
-        statsTable(rows.map((r) => [r.name, `skew ${num(r.d.skewness, 3)} · kurtosis ${num(r.d.kurtosis, 3)}`])));
+        statsTable(rows.map((r) => [r.name, `skew ${num(r.d.skewness, 3)} · kurtosis ${num(r.d.kurtosis, 3)}`])),
+        groupedUnitNote(table));
       const gspec = table.type === 'xy' ? null : graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' });
       return wrap('Descriptive statistics', node, gspec);
     }
@@ -755,26 +788,30 @@
           statsTable(rows),
           el('div', { class: 'assump ' + (anyNon ? 'fail' : 'pass') }, anyNon ? '✗ At least one test rejects normality — consider a non-parametric test.' : '✓ Consistent with a normal distribution — parametric tests are reasonable.'));
       });
-      const node = card('Normality tests', ...blocks, el('div', { class: 'note' }, '✓ = consistent with normal (p ≥ 0.05); ✗ = deviates from normal (p < 0.05). With large n, tiny deviations become significant — also inspect the plot.'));
+      const node = card('Normality tests', ...blocks, groupedUnitNote(table), el('div', { class: 'note' }, '✓ = consistent with normal (p ≥ 0.05); ✗ = deviates from normal (p < 0.05). With large n, tiny deviations become significant — also inspect the plot.'));
       return wrap('Normality tests', node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' }));
     }
 
     if (kind === 'grubbs') {
-      const g = groups[0];
-      if (spec.iterative) {
-        const r = N.grubbsIterative(g.values);
-        const node = card("Grubbs' iterative outlier test — " + g.name,
-          r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`)) : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
-          r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', {}, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
-          el('div', { class: 'note' }, `${r.cleanedN} of ${g.values.length} values remain after removing outliers. Always document why a value is excluded.`));
-        return wrap("Grubbs' (iterative): " + g.name, node, graphSpec('dot', groups, { title: table.name, yLabel: g.name, errorType: 'sd' }));
-      }
-      const r = N.grubbs(g.values);
-      const node = card("Grubbs' outlier test — " + g.name,
-        verdict(r.p, `The value ${num(r.value)} is a significant outlier.`, `No significant outlier (most extreme value = ${num(r.value)}).`),
-        statsTable([['Most extreme value', num(r.value)], ['G (test statistic)', num(r.G, 4)], ['G critical (α=0.05)', num(r.Gcrit, 4)], ['Mean / SD', `${num(r.mean)} / ${num(r.sd)}`], ['n', r.n], ['P value (two-sided)', fmtP(r.p)]]),
+      const blocks = groups.map((g) => {
+        const head = el('div', { class: 'section-label' }, g.name + `  (n=${g.values.length})`);
+        if (g.values.length < 3) return el('div', { style: 'margin-bottom:14px' }, head, el('div', { class: 'note' }, 'Need at least 3 values to test for an outlier.'));
+        if (spec.iterative) {
+          const r = N.grubbsIterative(g.values);
+          return el('div', { style: 'margin-bottom:14px' }, head,
+            r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`)) : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
+            r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', {}, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
+            el('div', { class: 'note' }, `${r.cleanedN} of ${g.values.length} values remain after removing outliers.`));
+        }
+        const r = N.grubbs(g.values);
+        return el('div', { style: 'margin-bottom:14px' }, head,
+          verdict(r.p, `The value ${num(r.value)} is a significant outlier.`, `No significant outlier (most extreme value = ${num(r.value)}).`),
+          statsTable([['Most extreme value', num(r.value)], ['G (test statistic)', num(r.G, 4)], ['G critical (α=0.05)', num(r.Gcrit, 4)], ['Mean / SD', `${num(r.mean)} / ${num(r.sd)}`], ['n', r.n], ['P value (two-sided)', fmtP(r.p)]]));
+      });
+      const node = card("Grubbs' outlier test" + (spec.iterative ? ' (iterative ESD)' : ''), ...blocks,
+        groupedUnitNote(table),
         el('div', { class: 'note' }, 'Grubbs assumes the rest of the data are approximately normal. Investigate outliers before deleting them.'));
-      return wrap("Grubbs': " + g.name, node, graphSpec('dot', groups, { title: table.name, yLabel: g.name, errorType: 'sd' }));
+      return wrap("Grubbs' outlier test", node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' }));
     }
 
     if (kind === 'survival') {
@@ -1157,7 +1194,7 @@
     body.append(opts);
     // offer quick normality check when relevant
     if (/normal/i.test(node.q)) {
-      const tbl = App.tables.find((t) => t.type === 'column' && t.hasData());
+      const tbl = App.tables.find((t) => (t.type === 'column' || t.type === 'grouped') && t.hasData());
       if (tbl) body.append(el('button', { class: 'btn btn-sm', style: 'margin-top:14px', onclick: () => { hideModal('modal-guide'); runAnalysis(tbl, { kind: 'normality' }); } }, '🔔 Run a normality test on "' + tbl.name + '" now'));
     }
   }
