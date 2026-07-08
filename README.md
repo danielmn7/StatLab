@@ -94,9 +94,10 @@ Significance brackets are added automatically — switch them between asterisks
 restyle their color, text size, weight, and connecting line. **Hover any bar** to see
 that group's **mean, median, mode, and range** at a glance, and optionally overlay
 **every individual data point** — the bar turns translucent so the points stay clearly
-visible. Customize colors, titles, axes, error-bar type, and **bar width / point
+visible. Customize colors, titles, axes, error-bar type, **bar width / point
 spacing** — tighten or spread the columns to fine-tune the gap between categories —
-then export to **SVG** or **PNG**.
+and the **font size and bold weight of titles and axis labels** (tick numbers scale
+along but stay smaller so they never crowd the plot), then export to **SVG** or **PNG**.
 
 ### Saving
 Your work autosaves to the browser. Use **Save** to download a `.json` project file
