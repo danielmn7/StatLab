@@ -1061,6 +1061,8 @@
       const idx = moveOrder(graph.spec.groups.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
       graph.spec.groups = moveArr(graph.spec.groups, idx);
       if (Array.isArray(o.colors)) o.colors = moveArr(o.colors, idx);
+      if (Array.isArray(o.markers)) o.markers = moveArr(o.markers, idx);
+      if (o.pointMarkers) o.pointMarkers = remapPointGroups(o.pointMarkers, inv);
       if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { i: inv[s.i], j: inv[s.j] }));
       refresh();
     }
@@ -1081,6 +1083,7 @@
     }
     if (['bar', 'dot', 'box'].includes(ct)) enableCatDrag(canvas, reorderGroups);
     enableBarTooltip(canvas);
+    if (['dot', 'bar', 'xy'].includes(ct)) enablePointSymbolEdit(canvas, graph, ct, refresh);
 
     // chart type (depends on data)
     const types = graph.spec.chartType === 'survival' ? [['survival', 'Survival curve']]
@@ -1088,14 +1091,14 @@
         : graph.spec.chartType === 'grouped' ? [['grouped', 'Grouped bar']]
           : graph.spec.chartType === 'paired' ? [['paired', 'Before–after'], ['bar', 'Bar (group means)'], ['dot', 'Column scatter'], ['box', 'Box & whisker']]
             : [['bar', 'Bar + error'], ['dot', 'Column scatter'], ['box', 'Box & whisker']];
-    controls.append(ctrlGroup('Chart type', el('select', { onchange: (e) => { graph.spec.chartType = e.target.value; rerender(); } }, ...types.map(([v, t]) => el('option', { value: v, selected: graph.spec.chartType === v }, t)))));
+    controls.append(ctrlGroup('Chart type', el('select', { onchange: (e) => { graph.spec.chartType = e.target.value; refresh(); } }, ...types.map(([v, t]) => el('option', { value: v, selected: graph.spec.chartType === v }, t)))));
 
     if (['bar', 'dot', 'grouped'].includes(graph.spec.chartType)) {
       controls.append(ctrlGroup('Error bars', el('select', { onchange: (e) => { o.errorType = e.target.value; rerender(); } },
         ...[['sem', 'Mean ± SEM'], ['sd', 'Mean ± SD'], ['ci95', 'Mean ± 95% CI'], ['none', 'Mean only']].map(([v, t]) => el('option', { value: v, selected: o.errorType === v }, t)))));
     }
     if (graph.spec.chartType === 'bar') {
-      controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints, (v) => { o.showPoints = v; rerender(); })));
+      controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints, (v) => { o.showPoints = v; refresh(); })));
       controls.append(el('div', { class: 'ctrl-note' }, 'Tip: hover any bar to see its mean, median, mode & range.'));
     }
     if (graph.spec.chartType === 'survival') {
@@ -1109,16 +1112,44 @@
     if (ct === 'xy' || ct === 'survival') controls.append(ctrlGroup('X-axis label', el('input', { type: 'text', value: o.xLabel || '', oninput: (e) => { o.xLabel = e.target.value; rerender(); } })));
     if (o.xAxis) controls.append(axisScaleControls('X', o.xAxis, { log: ct === 'xy', rerender }));
 
-    // colors
-    const colorItems = graph.spec.groups ? graph.spec.groups.map((g) => g.name) : (graph.spec.chartType === 'grouped' ? graph.spec.colNames : null);
-    if (colorItems) {
+    // ---- color palette + per-series color overrides ----
+    // only chart types whose builders honor opts.colors (paired/xy use fixed colors)
+    const colorItems = ['bar', 'dot', 'box'].includes(ct) ? (graph.spec.groups || []).map((g) => g.name)
+      : ct === 'grouped' ? graph.spec.colNames
+        : (ct === 'survival' && graph.spec.curves) ? graph.spec.curves.map((c) => c.name)
+          : null;
+    if (colorItems && colorItems.length) {
+      // one color per item, cycling the current palette so swatches line up 1:1
+      const src = (o.colors && o.colors.length) ? o.colors : Charts.PALETTE;
+      o.colors = Charts.expandPalette(src, colorItems.length).map(toHex);
+      if (o.paletteId == null) o.paletteId = detectPaletteId(o.colors);
+      controls.append(ctrlGroup('Color palette', palettePicker(o, colorItems.length, refresh)));
       const sw = el('div', { class: 'swatch' });
-      const cols = o.colors || Charts.PALETTE;
-      o.colors = cols.slice();
       colorItems.forEach((nm, i) => {
-        sw.append(el('input', { type: 'color', value: toHex(o.colors[i % o.colors.length]), title: nm, oninput: (e) => { o.colors[i] = e.target.value; rerender(); } }));
+        sw.append(el('input', { type: 'color', value: toHex(o.colors[i]), title: nm, oninput: (e) => { o.colors[i] = e.target.value; o.paletteId = null; rerender(); } }));
       });
-      controls.append(ctrlGroup('Colors', sw));
+      controls.append(ctrlGroup('Fine-tune colors', sw));
+    }
+    // ---- point symbols (per-series marker shape, plus per-point overrides) ----
+    if (ct === 'dot' || (ct === 'bar' && o.showPoints)) {
+      o.markers = o.markers || [];
+      const box = el('div', { class: 'marker-list' });
+      (graph.spec.groups || []).forEach((g, i) => {
+        const sel = el('select', { onchange: (e) => { o.markers[i] = e.target.value; rerender(); } },
+          ...Charts.MARKERS.map(([v, t]) => el('option', { value: v, selected: (o.markers[i] || 'circle') === v }, t)));
+        box.append(el('div', { class: 'marker-row' }, el('span', { class: 'marker-name', title: g.name }, g.name), sel));
+      });
+      controls.append(ctrlGroup('Point symbols', box));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Double-click a single point on the figure to give that one replicate its own symbol.'));
+      appendCustomPointsNote(controls, o, refresh);
+    }
+    if (ct === 'xy') {
+      controls.append(ctrlGroup('Point symbol', el('select', { onchange: (e) => { o.marker = e.target.value; rerender(); } },
+        ...Charts.MARKERS.map(([v, t]) => el('option', { value: v, selected: (o.marker || 'circle') === v }, t)))));
+      controls.append(ctrlGroup('Point color', el('div', { class: 'swatch' },
+        el('input', { type: 'color', value: toHex(o.pointColor || '#2563eb'), title: 'Point color', oninput: (e) => { o.pointColor = e.target.value; rerender(); } }))));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Double-click a single point on the figure to give it its own symbol.'));
+      appendCustomPointsNote(controls, o, refresh);
     }
     // significance brackets: pick which comparisons appear, then style them
     if (o.sig && o.sig.length && ['bar', 'dot', 'box', 'grouped'].includes(ct)) {
@@ -1176,6 +1207,35 @@
     return box;
   }
   function toHex(c) { if (/^#/.test(c)) return c; return '#0d9488'; }
+  // If the current colors exactly match a known palette (cycled to length), return its
+  // id so the picker highlights it; else null (e.g. after a manual per-series tweak).
+  function detectPaletteId(colors) {
+    const norm = colors.map((c) => String(c).toLowerCase());
+    const hit = Charts.PALETTES.find((p) => Charts.expandPalette(p.colors, norm.length).every((c, i) => c.toLowerCase() === norm[i]));
+    return hit ? hit.id : null;
+  }
+  // Scrollable gallery of named color palettes, grouped with subheaders and a "CB"
+  // badge on colorblind-safe schemes. Clicking a row applies it to every group/series
+  // (cycling colors to the item count) and records opts.paletteId for the highlight.
+  function palettePicker(o, n, refresh) {
+    const box = el('div', { class: 'palette-list' });
+    const preview = Math.min(Math.max(n, 5), 10);
+    let lastGroup = null;
+    Charts.PALETTES.forEach((p) => {
+      if (p.group !== lastGroup) { box.append(el('div', { class: 'palette-group-head' }, p.group)); lastGroup = p.group; }
+      const strip = el('div', { class: 'palette-swatches' });
+      Charts.expandPalette(p.colors, preview).forEach((c) => strip.append(el('span', { class: 'palette-sw', style: 'background:' + c })));
+      const meta = el('div', { class: 'palette-meta' },
+        el('span', { class: 'palette-name' }, p.name),
+        p.cb ? el('span', { class: 'pal-badge', title: 'Colorblind-safe' }, 'CB') : null);
+      box.append(el('div', {
+        class: 'palette-item' + (o.paletteId === p.id ? ' selected' : ''),
+        title: p.name + (p.cb ? ' — colorblind-safe' : ''),
+        onclick: () => { o.colors = Charts.expandPalette(p.colors, n).map(toHex); o.paletteId = p.id; refresh(); },
+      }, meta, strip));
+    });
+    return box;
+  }
   function numInput(val, ph, on) { return el('input', { type: 'number', step: 'any', placeholder: ph, value: (val === 0 || val) ? val : '', oninput: (e) => on(e.target.value.trim()) }); }
   // one labeled group: Auto-range checkbox → reveals Min/Max, plus optional Log + Scientific-notation toggles
   function axisScaleControls(dim, axis, cfg) {
@@ -1207,6 +1267,70 @@
       box.append(chip);
     });
     return box;
+  }
+  // remap per-point overrides ("group:index" → shape) after a category reorder
+  function remapPointGroups(pm, inv) {
+    const out = {};
+    for (const k in pm) { const s = k.split(':'); out[inv[+s[0]] + ':' + s[1]] = pm[k]; }
+    return out;
+  }
+  // small "N custom points · clear all" line under the point-symbol controls
+  function appendCustomPointsNote(controls, o, refresh) {
+    const n = o.pointMarkers ? Object.keys(o.pointMarkers).length : 0;
+    if (!n) return;
+    controls.append(el('div', { class: 'ctrl-note' }, `${n} custom point${n > 1 ? 's' : ''} · `,
+      el('span', { class: 'ctrl-link', onclick: () => { o.pointMarkers = {}; refresh(); } }, 'clear all')));
+  }
+  // double-click a single point to override its symbol. Hit-tests by nearest .data-point
+  // (charts.js stamps each point's group/index/coords) so overlays don't block it.
+  function enablePointSymbolEdit(canvas, graph, ct, refresh) {
+    canvas.addEventListener('dblclick', (ev) => {
+      const hit = pointAt(canvas, ev);
+      if (!hit) return;
+      ev.preventDefault();
+      const pg = +hit.getAttribute('data-pg'), pi = +hit.getAttribute('data-pi'), key = pg + ':' + pi;
+      const o = graph.spec.opts; o.pointMarkers = o.pointMarkers || {};
+      const g = graph.spec.groups && graph.spec.groups[pg];
+      const label = ct === 'xy' ? `Point ${pi + 1}` : `${g ? g.name : 'Group ' + (pg + 1)} · point ${pi + 1}`;
+      openPointSymbolMenu(ev.clientX, ev.clientY, o.pointMarkers[key] || null, label, (shape) => {
+        if (shape) o.pointMarkers[key] = shape; else delete o.pointMarkers[key];
+        refresh();
+      });
+    });
+  }
+  // nearest data point (in SVG user units) to the click, or null if none is close
+  function pointAt(canvas, ev) {
+    const svg = canvas.querySelector('svg');
+    if (!svg || !svg.getScreenCTM) return null;
+    const pts = svg.querySelectorAll('.data-point');
+    if (!pts.length) return null;
+    const ctm = svg.getScreenCTM(); if (!ctm) return null;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
+    let best = null, bestD = Infinity;
+    pts.forEach((el2) => { const dx = +el2.getAttribute('data-px') - p.x, dy = +el2.getAttribute('data-py') - p.y; const d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = el2; } });
+    return bestD <= 16 * 16 ? best : null;
+  }
+  function closePointMenu() { const m = document.getElementById('pt-menu'); if (m) { if (m._cleanup) m._cleanup(); m.remove(); } }
+  // floating popup at (clientX,clientY): pick a shape for this one point, or reset it
+  function openPointSymbolMenu(clientX, clientY, current, label, onPick) {
+    closePointMenu();
+    const shapes = el('div', { class: 'pt-menu-shapes' },
+      ...Charts.MARKERS.map(([v, t]) => el('button', { class: 'pt-shape' + (current === v ? ' active' : ''), title: t, onclick: () => { onPick(v); closePointMenu(); } }, t.split(' ')[0])));
+    const menu = el('div', { class: 'pt-menu', id: 'pt-menu' },
+      el('div', { class: 'pt-menu-title' }, label),
+      shapes,
+      el('button', { class: 'pt-reset', onclick: () => { onPick(null); closePointMenu(); } }, '↺ Reset to series default'));
+    document.body.append(menu);
+    const pad = 10, mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let left = clientX + pad, top = clientY + pad;
+    if (left + mw > window.innerWidth - 8) left = clientX - pad - mw;
+    if (top + mh > window.innerHeight - 8) top = clientY - pad - mh;
+    menu.style.left = Math.max(8, left) + 'px';
+    menu.style.top = Math.max(8, top) + 'px';
+    const outside = (e) => { if (!menu.contains(e.target)) closePointMenu(); };
+    const esc = (e) => { if (e.key === 'Escape') closePointMenu(); };
+    menu._cleanup = () => { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc); };
+    setTimeout(() => { document.addEventListener('mousedown', outside); document.addEventListener('keydown', esc); }, 0);
   }
   // drag a category directly on the chart via the transparent .cat-hit rects
   function enableCatDrag(canvas, onMove) {

@@ -7,6 +7,90 @@ const Charts = (function () {
 
   const PALETTE = ['#0d9488', '#2563eb', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#65a30d', '#db2777'];
 
+  // Curated palette library for the figure "Color palette" picker. Colors map to
+  // discrete groups/series, so these are categorical (or perceptual schemes sampled
+  // to discrete swatches). Drawn from the schemes scientists reach for — ColorBrewer,
+  // Tableau, matplotlib/viridis, ggsci journal themes, and colorblind-safe sets
+  // (Okabe–Ito, Paul Tol, IBM). `cb:true` marks palettes that stay distinguishable
+  // under common color-vision deficiencies. `group` drives the picker's subheaders.
+  const PALETTES = [
+    // --- general categorical ---
+    { id: 'statlab', name: 'StatLab', group: 'General', colors: PALETTE },
+    { id: 'tableau10', name: 'Tableau 10', group: 'General', colors: ['#4E79A7', '#F28E2B', '#E15759', '#76B7B2', '#59A14F', '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC'] },
+    { id: 'd3cat10', name: 'D3 Category 10', group: 'General', colors: ['#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD', '#8C564B', '#E377C2', '#7F7F7F', '#BCBD22', '#17BECF'] },
+    { id: 'set1', name: 'ColorBrewer Set1', group: 'General', colors: ['#E41A1C', '#377EB8', '#4DAF4A', '#984EA3', '#FF7F00', '#FFFF33', '#A65628', '#F781BF', '#999999'] },
+    { id: 'set2', name: 'ColorBrewer Set2', group: 'General', colors: ['#66C2A5', '#FC8D62', '#8DA0CB', '#E78AC3', '#A6D854', '#FFD92F', '#E5C494', '#B3B3B3'] },
+    { id: 'dark2', name: 'ColorBrewer Dark2', group: 'General', colors: ['#1B9E77', '#D95F02', '#7570B3', '#E7298A', '#66A61E', '#E6AB02', '#A6761D', '#666666'] },
+    { id: 'set3', name: 'ColorBrewer Set3', group: 'General', colors: ['#8DD3C7', '#FFFFB3', '#BEBADA', '#FB8072', '#80B1D3', '#FDB462', '#B3DE69', '#FCCDE5', '#D9D9D9', '#BC80BD', '#CCEBC5', '#FFED6F'] },
+    { id: 'paired', name: 'ColorBrewer Paired', group: 'General', colors: ['#A6CEE3', '#1F78B4', '#B2DF8A', '#33A02C', '#FB9A99', '#E31A1C', '#FDBF6F', '#FF7F00', '#CAB2D6', '#6A3D9A', '#FFFF99', '#B15928'] },
+    { id: 'accent', name: 'ColorBrewer Accent', group: 'General', colors: ['#7FC97F', '#BEAED4', '#FDC086', '#FFFF99', '#386CB0', '#F0027F', '#BF5B17', '#666666'] },
+    { id: 'pastel1', name: 'ColorBrewer Pastel1', group: 'General', colors: ['#FBB4AE', '#B3CDE3', '#CCEBC5', '#DECBE4', '#FED9A6', '#FFFFCC', '#E5D8BD', '#FDDAEC', '#F2F2F2'] },
+    { id: 'vivid', name: 'Vivid (Prism-style)', group: 'General', colors: ['#023EFF', '#FF7C00', '#1AC938', '#E8000B', '#8B2BE2', '#9F4800', '#F14CC1', '#A3A3A3', '#FFC400', '#00D7FF'] },
+    { id: 'muted', name: 'Muted', group: 'General', colors: ['#4878D0', '#EE854A', '#6ACC64', '#D65F5F', '#956CB4', '#8C613C', '#DC7EC0', '#797979', '#D5BB67', '#82C6E2'] },
+    // --- journal (ggsci) ---
+    { id: 'npg', name: 'Nature (NPG)', group: 'Journal', colors: ['#E64B35', '#4DBBD5', '#00A087', '#3C5488', '#F39B7F', '#8491B4', '#91D1C2', '#DC0000', '#7E6148', '#B09C85'] },
+    { id: 'aaas', name: 'Science (AAAS)', group: 'Journal', colors: ['#3B4992', '#EE0000', '#008B45', '#631879', '#008280', '#BB0021', '#5F559B', '#A20056', '#808180', '#1B1919'] },
+    { id: 'lancet', name: 'Lancet', group: 'Journal', colors: ['#00468B', '#ED0000', '#42B540', '#0099B4', '#925E9F', '#FDAF91', '#AD002A', '#ADB6B6', '#1B1919'] },
+    { id: 'nejm', name: 'NEJM', group: 'Journal', colors: ['#BC3C29', '#0072B5', '#E18727', '#20854E', '#7876B1', '#6F99AD', '#FFDC91', '#EE4C97'] },
+    { id: 'jama', name: 'JAMA', group: 'Journal', colors: ['#374E55', '#DF8F44', '#00A1D5', '#B24745', '#79AF97', '#6A6599', '#80796B'] },
+    // --- colorblind-safe ---
+    { id: 'okabe', name: 'Okabe–Ito', group: 'Colorblind-safe', cb: true, colors: ['#E69F00', '#56B4E9', '#009E73', '#F0E442', '#0072B2', '#D55E00', '#CC79A7', '#000000'] },
+    { id: 'tolBright', name: 'Tol Bright', group: 'Colorblind-safe', cb: true, colors: ['#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB'] },
+    { id: 'tolMuted', name: 'Tol Muted', group: 'Colorblind-safe', cb: true, colors: ['#CC6677', '#332288', '#DDCC77', '#117733', '#88CCEE', '#882255', '#44AA99', '#999933', '#AA4499'] },
+    { id: 'tolVibrant', name: 'Tol Vibrant', group: 'Colorblind-safe', cb: true, colors: ['#EE7733', '#0077BB', '#33BBEE', '#EE3377', '#CC3311', '#009988', '#BBBBBB'] },
+    { id: 'tableauCB', name: 'Tableau Colorblind', group: 'Colorblind-safe', cb: true, colors: ['#1170AA', '#FC7D0B', '#A3ACB9', '#57606C', '#5FA2CE', '#C85200', '#7B848F', '#A3CCE9', '#FFBC79', '#C8D0D9'] },
+    { id: 'ibm', name: 'IBM', group: 'Colorblind-safe', cb: true, colors: ['#648FFF', '#785EF0', '#DC267F', '#FE6100', '#FFB000'] },
+    // --- perceptual (matplotlib), sampled to discrete swatches ---
+    { id: 'viridis', name: 'Viridis', group: 'Perceptual', cb: true, colors: ['#440154', '#46327E', '#365C8D', '#277F8E', '#1FA187', '#4AC16D', '#A0DA39', '#FDE725'] },
+    { id: 'cividis', name: 'Cividis', group: 'Perceptual', cb: true, colors: ['#00204D', '#00336F', '#4C556A', '#6C6D72', '#8A8779', '#ADA361', '#D3C164', '#FFEA46'] },
+    { id: 'plasma', name: 'Plasma', group: 'Perceptual', cb: true, colors: ['#0D0887', '#5402A3', '#8B0AA5', '#B93289', '#DB5C68', '#F48849', '#FEBC2A', '#F0F921'] },
+    { id: 'magma', name: 'Magma', group: 'Perceptual', cb: true, colors: ['#000004', '#221150', '#5F187F', '#982D80', '#D3436E', '#F1605D', '#FE9F6D', '#FCFDBF'] },
+    { id: 'inferno', name: 'Inferno', group: 'Perceptual', cb: true, colors: ['#000004', '#280B54', '#65156E', '#9F2A63', '#D44842', '#F57D15', '#FAC127', '#FCFFA4'] },
+    // --- single-hue / mono ---
+    { id: 'blues', name: 'Blues', group: 'Single-hue', cb: true, colors: ['#08306B', '#08519C', '#2171B5', '#4292C6', '#6BAED6', '#9ECAE1', '#C6DBEF'] },
+    { id: 'greens', name: 'Greens', group: 'Single-hue', cb: true, colors: ['#00441B', '#006D2C', '#238B45', '#41AB5D', '#74C476', '#A1D99B', '#C7E9C0'] },
+    { id: 'grayscale', name: 'Grayscale', group: 'Single-hue', cb: true, colors: ['#1A1A1A', '#4D4D4D', '#737373', '#969696', '#B3B3B3', '#CCCCCC'] },
+  ];
+  function paletteById(id) { return PALETTES.find((p) => p.id === id) || null; }
+  // Expand a palette's colors to exactly n entries by cycling — keeps per-item color
+  // swatches aligned 1:1 with groups even when there are more groups than base colors.
+  function expandPalette(colors, n) { const out = []; for (let i = 0; i < n; i++) out.push(colors[i % colors.length]); return out; }
+
+  // ---- point markers (per-series symbol shapes) ----
+  // Shape ids used by the figure "Point symbols" control.
+  const MARKERS = [['circle', '● Circle'], ['square', '■ Square'], ['triangle', '▲ Triangle'], ['diamond', '◆ Diamond'], ['cross', '✕ Cross']];
+  // SVG for one data-point marker centered at (cx,cy), sized to roughly match a
+  // radius-r circle. opt: {fill, stroke, fillOpacity, strokeWidth, attrs}. `attrs` is
+  // extra markup injected on the element (class + data-* so the app can hit-test the
+  // point for per-point editing). The open "cross" (×) has no fill and is stroked in
+  // the marker's fill color so it reads on any background.
+  function markerSVG(cx, cy, r, shape, opt) {
+    opt = opt || {};
+    const fill = opt.fill || '#1c2733';
+    const stroke = opt.stroke || fill;
+    const fo = opt.fillOpacity != null ? opt.fillOpacity : 1;
+    const sw = opt.strokeWidth != null ? opt.strokeWidth : 0.8;
+    const x = opt.attrs ? ' ' + opt.attrs : '';
+    const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"`;
+    switch (shape) {
+      case 'square': { const s = r * 1.78; return `<rect x="${(cx - s / 2).toFixed(2)}" y="${(cy - s / 2).toFixed(2)}" width="${s.toFixed(2)}" height="${s.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
+      case 'triangle': { const h = r * 2.0; const p = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ${(cx - h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ${(cx + h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`; return `<polygon points="${p}" fill="${fill}" ${common}${x}/>`; }
+      case 'diamond': { const d = r * 1.48; return `<polygon points="${cx.toFixed(2)},${(cy - d).toFixed(2)} ${(cx + d).toFixed(2)},${cy.toFixed(2)} ${cx.toFixed(2)},${(cy + d).toFixed(2)} ${(cx - d).toFixed(2)},${cy.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
+      case 'cross': { const a = r * 1.2; return `<path d="M${(cx - a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx + a).toFixed(2)} ${(cy + a).toFixed(2)} M${(cx + a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx - a).toFixed(2)} ${(cy + a).toFixed(2)}" fill="none" stroke="${fill}" stroke-width="${Math.max(sw, 1.7).toFixed(2)}" stroke-linecap="round"${x}/>`; }
+      default: return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r}" fill="${fill}" ${common}${x}/>`;
+    }
+  }
+  // Per-point symbol resolution + hit-test metadata. A point is identified by
+  // "group:index"; opts.pointMarkers[key] (set by double-click) overrides the series
+  // default. ptAttrs stamps the class + coordinates the app reads to locate a point.
+  function ptShape(opts, g, vi, seriesShape) {
+    const pm = opts.pointMarkers; const k = g + ':' + vi;
+    return (pm && pm[k]) || seriesShape || 'circle';
+  }
+  function ptAttrs(g, vi, px, py) {
+    return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"`;
+  }
+
   // ---- numeric helpers ----
   function mean(a) { return a.reduce((s, v) => s + v, 0) / a.length; }
   function sd(a) { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); }
@@ -249,8 +333,9 @@ const Charts = (function () {
       } else tops.push(yTop);
       // points
       if (opts.showPoints) {
+        const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
         let seed = i * 99 + 7;
-        st.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; marks += `<circle cx="${x + j}" cy="${sc.toY(v)}" r="3.1" fill="#1c2733" fill-opacity="0.9" stroke="#ffffff" stroke-width="0.8"/>`; });
+        st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="12" fill="#1c2733">${esc(st.name)}</text>`;
@@ -292,8 +377,9 @@ const Charts = (function () {
       const col = colors[i % colors.length];
       const m = mean(g.values), se = sem(g.values), sdv = sd(g.values);
       const err = errType === 'sem' ? se : errType === 'ci95' ? tcrit95(g.values.length - 1) * se : sdv;
+      const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
       let seed = i * 131 + 17;
-      g.values.forEach((v) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * Math.min(46, slot * 0.5); marks += `<circle cx="${x + j}" cy="${sc.toY(v)}" r="3.6" fill="${col}" fill-opacity="0.78" stroke="${col}" stroke-width="0.8"/>`; });
+      g.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * Math.min(46, slot * 0.5); const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.6, ptShape(opts, i, vi, seriesShape), { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       // mean line + error
       const wm = 22;
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
@@ -416,11 +502,14 @@ const Charts = (function () {
       marks += `<line x1="${band[0].x}" y1="${band[0].y}" x2="${band[N].x}" y2="${band[N].y}" stroke="#0d9488" stroke-width="2"/>`;
     }
     // points
+    const ptFill = opts.pointColor || '#2563eb', ptStroke = opts.pointColor || '#1d4ed8';
+    const seriesShape = opts.marker || 'circle';
     const t = { log: 0, out: 0, logFail: (xAx.log && !scx.log) || (yAx.log && !sc.log) };
     for (let i = 0; i < xs.length; i++) {
       if ((scx.log && !(xs[i] > 0)) || (sc.log && !(ys[i] > 0))) { t.log++; continue; }
       if (xs[i] < scx.min - 1e-9 || xs[i] > scx.max + 1e-9 || ys[i] < sc.min - 1e-9 || ys[i] > sc.max + 1e-9) t.out++;
-      marks += `<circle cx="${scx.toX(xs[i])}" cy="${sc.toY(ys[i])}" r="3.8" fill="#2563eb" fill-opacity="0.75" stroke="#1d4ed8" stroke-width="0.8"/>`;
+      const px = scx.toX(xs[i]), py = sc.toY(ys[i]);
+      marks += markerSVG(px, py, 3.8, ptShape(opts, 0, i, seriesShape), { fill: ptFill, stroke: ptStroke, fillOpacity: 0.75, strokeWidth: 0.8, attrs: ptAttrs(0, i, px, py) });
     }
     s += clipWrap(f, uid, marks);
     if (opts.annotation) s += `<text x="${f.x0 + 10}" y="${f.y0 + 14}" font-size="11.5" fill="#5b6b7b">${esc(opts.annotation)}</text>`;
@@ -576,7 +665,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf };
+  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;
