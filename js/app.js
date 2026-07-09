@@ -878,7 +878,8 @@
         el('div', { class: 'section-label' }, 'Multiple comparisons: ' + dirText + ' (' + posthocName(spec.phmethod) + ')'),
         twoWayPosthocTable(ph),
         residualNormalityNote(cm.cells));
-      const gspec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem', sig: phSigForGrouped(ph, cm, spec.phdir) } };
+      const sigInfo = phSigForGrouped(ph);
+      const gspec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sigInfo.sig, sigNote: sigInfo.note } };
       return wrap('Two-way ANOVA', node, gspec);
     }
 
@@ -967,15 +968,32 @@
     });
     t.append(tb); return t;
   }
-  function phSigForGrouped(ph, cm, dir) {
-    if (dir !== 'colsWithinRow') return [];
-    const rIdx = {}; cm.rowNames.forEach((r, i) => { rIdx[r] = i; });
-    const cIdx = {}; cm.colNames.forEach((c, j) => { cIdx[c] = j; });
+  // Map each two-way post-hoc comparison to a significance bracket on the grouped-bar
+  // figure (categories = rows, bars-within = column groups). Cell-level comparisons
+  // (columns within a row, rows within a column, or every cell vs every cell) reference
+  // their two bars via {ca,ja,cb,jb}; a bracket may span bars in the same cluster OR
+  // across clusters. Significant ones are shown by default, capped so a busy figure
+  // isn't flooded; the rest ride along on:false so the graph's "Comparisons shown" list
+  // can toggle any of them. Main-effect comparisons of marginal means (colMeans/rowMeans)
+  // have no single bar to anchor to, so they return an explanatory note instead.
+  function phSigForGrouped(ph) {
     let shown = 0;
-    return ph.comparisons
-      .map((c) => ({ cat: rIdx[c.within], ja: cIdx[c.a], jb: cIdx[c.b], name: `${c.within}: ${c.a} vs ${c.b}`, label: stars(c.p), p: c.p, sig: !!c.sig }))
-      .filter((s) => s.cat != null && s.ja != null && s.jb != null)
+    const sig = ph.comparisons
+      .filter((c) => c.cellA && c.cellB)
+      .map((c) => ({
+        ca: c.cellA[0], ja: c.cellA[1], cb: c.cellB[0], jb: c.cellB[1],
+        name: (c.within && c.within !== '—' ? c.within + ': ' : '') + c.a + ' vs ' + c.b,
+        label: stars(c.p), p: c.p, sig: !!c.sig,
+      }))
+      .filter((s) => s.ca != null && s.ja != null && s.cb != null && s.jb != null)
       .map((s) => { const on = s.sig && shown < 8; if (on) shown++; return Object.assign(s, { on }); });
+    let note = null;
+    if (!sig.length && (ph.direction === 'colMeans' || ph.direction === 'rowMeans')) {
+      const which = ph.direction === 'colMeans' ? 'Column-group' : 'Row';
+      const over = ph.direction === 'colMeans' ? 'rows' : 'column groups';
+      note = which + ' main-effect comparisons average over the ' + over + ', so no single bar represents them — they aren’t drawn on the figure. See the multiple-comparisons table above for these p-values.';
+    }
+    return { sig, note };
   }
   function residualNormalityNote(cells) {
     const res = [];
@@ -1070,7 +1088,9 @@
       const idx = moveOrder(graph.spec.rowNames.length, from, to), inv = []; idx.forEach((oi, np) => (inv[oi] = np));
       graph.spec.rowNames = moveArr(graph.spec.rowNames, idx);
       graph.spec.cells = moveArr(graph.spec.cells, idx);
-      if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { cat: inv[s.cat] }));
+      // remap the category index of every bracket endpoint: ca/cb (cross-category shape)
+      // and legacy cat (older figures kept both endpoints in one category).
+      if (o.sig) o.sig = o.sig.map((s) => { const t = Object.assign({}, s); if (t.cat != null) t.cat = inv[t.cat]; if (t.ca != null) t.ca = inv[t.ca]; if (t.cb != null) t.cb = inv[t.cb]; return t; });
       refresh();
     }
     function reorderSeries(from, to) {
@@ -1194,6 +1214,8 @@
       thick.style.display = eff.showLine ? '' : 'none';
       controls.append(ctrlGroup('', checkbox('Show connecting bracket', eff.showLine, (v) => { ss.showLine = v; thick.style.display = v ? '' : 'none'; rerender(); })));
       controls.append(thick);
+    } else if (o.sigNote && ct === 'grouped') {
+      controls.append(ctrlGroup('Comparisons', el('div', { class: 'ctrl-note' }, o.sigNote)));
     }
     // reorder categories (drag chips; also draggable directly on bar/dot/box charts)
     if (['bar', 'dot', 'box'].includes(ct) && graph.spec.groups && graph.spec.groups.length > 1)
