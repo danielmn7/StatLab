@@ -88,5 +88,22 @@ ok('xy notes marked as imported from Prism', /Imported from GraphPad Prism/.test
 ok('xy notes leave a space for the user', /Your notes/.test(x.notes));
 ok('first table carries project info', /My project/.test(g.notes) && /Experimenter: DM/.test(g.notes));
 
+// ----- Rich-text (object) titles: real Prism files store titles as objects,
+// not plain strings (issue #27). Headings must resolve to their plain text,
+// never "[object Object]". -----
+const rt = {};
+const putR = (p, o) => { rt[p] = typeof o === 'string' ? o : JSON.stringify(o); };
+putR('document.json', { sheets: { data: ['RG'] } });
+putR('data/sheets/RG/sheet.json', { title: { rtf: '{\\rtf1 Grouped}', string: 'Grouped (rich)' }, table: { uid: 'TRG', format: 'grouped', dataFormat: 'y_replicates', replicatesCount: 2, rowTitlesDataSet: 'RRT', dataSets: ['RS1', 'RS2'] } });
+putR('data/sets/RRT.json', { format: 'text', attributes: ['DS_ATTR_RT'] });
+putR('data/sets/RS1.json', { title: { rtf: '{\\rtf1 Control}', string: 'Control' }, attributes: ['DS_ATTR_Y'], 'replicate ranges': [{ range: '0~1' }] });
+putR('data/sets/RS2.json', { title: { string: 'Treated' }, attributes: ['DS_ATTR_Y'], 'replicate ranges': [{ range: '0~1' }] });
+putR('data/tables/TRG/data.csv', 'r1,10,11,20,21\n');
+const rres = P.interpret(rt);
+const rg = rres.tableSpecs.find((t) => /Grouped/.test(t.name));
+eq('object title -> group names use plain text', rg.groupNames, ['Control', 'Treated']);
+eq('object title -> sheet name uses plain text', rg.name, 'Grouped (rich)');
+ok('no "[object Object]" heading leaks through', !rg.groupNames.some((n) => /\[object Object\]/.test(n)));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
