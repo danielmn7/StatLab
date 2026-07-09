@@ -1,6 +1,6 @@
 # StatLab — Scientific Statistics & Figures
 
-A GraphPad Prism–style **desktop application** for analyzing scientific data and
+A **desktop application** for analyzing scientific data and
 producing publication-quality figures. Runs locally — no accounts, no data leaves
 your machine.
 
