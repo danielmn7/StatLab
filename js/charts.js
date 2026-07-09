@@ -71,7 +71,10 @@ const Charts = (function () {
     const fo = opt.fillOpacity != null ? opt.fillOpacity : 1;
     const sw = opt.strokeWidth != null ? opt.strokeWidth : 0.8;
     const x = opt.attrs ? ' ' + opt.attrs : '';
-    const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"`;
+    // Overall element opacity (fill + stroke together) — used to fade points that
+    // sit on top of an error bar so the whisker reads through (issue #17).
+    const op = opt.opacity != null ? ` opacity="${opt.opacity}"` : '';
+    const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"${op}`;
     switch (shape) {
       case 'square': { const s = r * 1.78; return `<rect x="${(cx - s / 2).toFixed(2)}" y="${(cy - s / 2).toFixed(2)}" width="${s.toFixed(2)}" height="${s.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
       case 'triangle': { const h = r * 2.0; const p = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ${(cx - h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ${(cx + h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`; return `<polygon points="${p}" fill="${fill}" ${common}${x}/>`; }
@@ -89,6 +92,19 @@ const Charts = (function () {
   }
   function ptAttrs(g, vi, px, py) {
     return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"`;
+  }
+  // Does a data point (center px,py, radius r) overlap an error bar closely enough
+  // that drawing it opaque would hide the whisker? eb = { x, y0, y1, caps:[y…], capW }
+  // where y0..y1 is the vertical stem span and caps are the cap y-positions.
+  // Overlapping points are faded so the bar reads through them (issue #17).
+  function overlapsErrorBar(px, py, r, eb) {
+    if (!eb) return false;
+    const pad = r + 1.2;                                  // point radius + ~half the whisker stroke
+    if (Math.abs(px - eb.x) <= pad && py >= eb.y0 - pad && py <= eb.y1 + pad) return true;
+    for (let k = 0; k < eb.caps.length; k++) {
+      if (Math.abs(py - eb.caps[k]) <= pad && Math.abs(px - eb.x) <= eb.capW + r) return true;
+    }
+    return false;
   }
 
   // ---- numeric helpers ----
@@ -355,18 +371,23 @@ const Charts = (function () {
       const col = colors[i % colors.length];
       marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" stroke="${col}" stroke-width="1.2" rx="1.5"/>`;
       // error bar
+      let ebar = null;
       if (st.err > 0) {
         const yhi = sc.toY(st.m + st.err), ylo = sc.toY(st.m - st.err);
+        const both = opts.errorBothSides !== false;
+        const stemEnd = both ? ylo : (st.m >= 0 ? yTop : ylo);
         marks += `<line x1="${x}" y1="${yhi}" x2="${x}" y2="${st.m >= 0 ? yTop : ylo}" stroke="#1c2733" stroke-width="1.3"/>`;
         marks += `<line x1="${x - 7}" y1="${yhi}" x2="${x + 7}" y2="${yhi}" stroke="#1c2733" stroke-width="1.3"/>`;
-        if (opts.errorBothSides !== false) { marks += `<line x1="${x}" y1="${yTop}" x2="${x}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; marks += `<line x1="${x - 7}" y1="${ylo}" x2="${x + 7}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; }
+        if (both) { marks += `<line x1="${x}" y1="${yTop}" x2="${x}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; marks += `<line x1="${x - 7}" y1="${ylo}" x2="${x + 7}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; }
+        // geometry so overlapping points can be faded to reveal the whisker (issue #17)
+        ebar = { x, y0: Math.min(yhi, stemEnd), y1: Math.max(yhi, stemEnd), caps: both ? [yhi, ylo] : [yhi], capW: 7 };
         tops.push(yhi);
       } else tops.push(yTop);
       // points
       if (opts.showPoints) {
         const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
         let seed = i * 99 + 7;
-        st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
+        st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); const dim = overlapsErrorBar(px, py, 3.1, ebar); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, opacity: dim ? 0.32 : 1, attrs: ptAttrs(i, vi, px, py) }); });
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(st.name)}</text>`;
