@@ -30,7 +30,9 @@ jobs:
         run: npm test
 
       - name: Build Windows installer
-        run: npm run dist:win
+        # --publish never: electron-builder detects the git tag and would try to
+        # auto-publish (needs GH_TOKEN); we publish in the next step instead.
+        run: npm run dist:win -- --publish never
 
       - name: Publish GitHub Release
         shell: bash
