@@ -1200,6 +1200,23 @@
       });
       controls.append(ctrlGroup('Fine-tune colors', sw));
     }
+    // ---- bar outline: custom border color + bold (issue #14) ----
+    if (ct === 'bar' || ct === 'grouped') {
+      o.barBorder = o.barBorder || {};
+      const bb = o.barBorder;
+      const picker = el('input', { type: 'color', value: toHex(bb.color || '#1c2733'),
+        oninput: (e) => { bb.color = e.target.value; rerender(); } });
+      const pickerRow = el('div', { class: 'range-row' }, picker);
+      pickerRow.style.display = bb.color ? 'flex' : 'none';
+      const custom = checkbox('Custom border color', !!bb.color, (v) => {
+        bb.color = v ? (bb.color || '#1c2733') : null;
+        pickerRow.style.display = v ? 'flex' : 'none';
+        rerender();
+      });
+      const bold = checkbox('Bold border', !!bb.bold, (v) => { bb.bold = v; rerender(); });
+      controls.append(ctrlGroup('Bar border', el('div', { class: 'axis-ctrls' }, custom, pickerRow, bold)));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Off matches each bar’s fill colour; turn on to outline every bar in one colour.'));
+    }
     // ---- point symbols (per-series marker shape, plus per-point overrides) ----
     if (ct === 'dot' || (ct === 'bar' && o.showPoints)) {
       o.markers = o.markers || [];

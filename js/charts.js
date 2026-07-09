@@ -295,6 +295,16 @@ const Charts = (function () {
     const tickSize = Math.max(7, Math.min(labelSize - 0.5, 11.5 + (labelSize - 12.5) * 0.6)); // numeric ticks: damped so they never dominate
     return { titleSize, labelSize, catSize, tickSize, titleWeight: bold ? 650 : 400, labelWeight: bold ? 600 : 400, bold };
   }
+  // Bar outline (issue #14). By default the border matches the fill color at the
+  // builder's base width; opts.barBorder = { color, bold } lets the figure recolor
+  // the stroke (e.g. black outlines) and/or thicken it. `fillCol` is the bar's fill,
+  // `base` the builder's default stroke width. Returns a ready `stroke=… stroke-width=…`.
+  function barBorderOf(opts, fillCol, base) {
+    const b = (opts && opts.barBorder) || {};
+    const color = b.color || fillCol;
+    const width = b.bold ? Math.max(base * 2.2, 2.6) : base;
+    return { color, width, attr: `stroke="${color}" stroke-width="${width.toFixed(2)}"` };
+  }
   // label for one bracket from its p-value per the chosen notation; falls back to a
   // pre-stored label (figures saved before p-values were retained) when p is absent.
   function sigLabel(b, notation) {
@@ -369,7 +379,7 @@ const Charts = (function () {
       cx.push(x);
       const yTop = sc.toY(st.m), yBase = sc.toY(baseVal(sc));
       const col = colors[i % colors.length];
-      marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" stroke="${col}" stroke-width="1.2" rx="1.5"/>`;
+      marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" ${barBorderOf(opts, col, 1.2).attr} rx="1.5"/>`;
       // error bar
       let ebar = null;
       if (st.err > 0) {
@@ -682,7 +692,7 @@ const Charts = (function () {
         const c = cs[i][j]; if (c.empty) continue;
         const col = colors[j % colors.length];
         const yTop = sc.toY(c.m), yBase = sc.toY(baseVal(sc));
-        marks += `<rect x="${bx - barW / 2}" y="${Math.min(yTop, yBase)}" width="${barW}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="0.82" stroke="${col}" stroke-width="1.1" rx="1.5"/>`;
+        marks += `<rect x="${bx - barW / 2}" y="${Math.min(yTop, yBase)}" width="${barW}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1.1).attr} rx="1.5"/>`;
         if (c.err > 0) {
           const yhi = sc.toY(c.m + c.err), ylo = sc.toY(c.m - c.err);
           marks += `<line x1="${bx}" y1="${yhi}" x2="${bx}" y2="${ylo}" stroke="#1c2733" stroke-width="1.2"/>`;
@@ -722,7 +732,7 @@ const Charts = (function () {
       s += `<text x="${(bk.xL + bk.xR) / 2}" y="${y - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(bk.g, gst.notation))}</text>`;
     });
     // legend
-    colNames.forEach((cn, j) => { const col = colors[j % colors.length]; const lx = f.x1 - 118, ly = f.y0 + 12 + j * 17; s += `<rect x="${lx}" y="${ly - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" stroke="${col}"/>`; s += `<text x="${lx + 18}" y="${ly + 2}" font-size="11.5" fill="#1c2733">${esc(cn)}</text>`; });
+    colNames.forEach((cn, j) => { const col = colors[j % colors.length]; const lx = f.x1 - 118, ly = f.y0 + 12 + j * 17; s += `<rect x="${lx}" y="${ly - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1).attr}/>`; s += `<text x="${lx + 18}" y="${ly + 2}" font-size="11.5" fill="#1c2733">${esc(cn)}</text>`; });
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
     s += '</svg>';
