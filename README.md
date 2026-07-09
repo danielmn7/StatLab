@@ -10,7 +10,7 @@ your machine.
 
 **Windows:** download the installer from the
 [**latest release**](https://github.com/danielmn7/StatLab/releases/latest) —
-grab `StatLab-Setup-1.0.0.exe`, double-click it, and follow the prompts (it adds
+grab `StatLab-Setup-1.2.1.exe`, double-click it, and follow the prompts (it adds
 Start Menu + desktop shortcuts and lets you pick the install folder). No Node,
 npm, or accounts required.
 
@@ -63,7 +63,7 @@ npm run dist       # current platform (mac .dmg / linux AppImage)
 ```
 
 This writes to `dist/`:
-- **`dist/StatLab Setup 1.0.0.exe`** — the installer (double-click to install; adds
+- **`dist/StatLab-Setup-1.2.1.exe`** — the installer (double-click to install; adds
   Start Menu + desktop shortcuts, lets you pick the install folder).
 - **`dist/win-unpacked/StatLab.exe`** — a portable build that runs without installing.
 
