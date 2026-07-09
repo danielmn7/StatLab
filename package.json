@@ -5,6 +5,7 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node tests/check.js && node tests/prism.check.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win"
   },

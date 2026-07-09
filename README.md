@@ -131,6 +131,20 @@ along but stay smaller so they never crowd the plot), then export to **SVG** or 
 Your work autosaves to the browser. Use **Save** to download a `.json` project file
 and **Open** to load one back (portable across machines).
 
+### Opening GraphPad Prism files
+**Open Prism** (or drag a `.prism` file onto the window) reads a modern GraphPad
+Prism project. Each Prism data table becomes a StatLab table — Column, Grouped
+(two-way), XY, and Survival layouts are recognized, along with group names,
+replicate counts, and row titles. Anything Prism recorded about a table — **which
+analyses were run and their result notes** — is dropped into that table's **Notes**,
+marked as imported from Prism, ready for the numbers to be re-analyzed in StatLab.
+
+### Notes
+Every data table has a **Notes** panel beside it (collapsible with **Hide**). Write
+observations, methods, or context there; it saves with your project. When you open a
+`.prism` file, Prism's recorded tests and results land here automatically, with room
+left below for your own notes.
+
 ## Accuracy
 
 The statistics engine is verified against authoritative references — see
@@ -145,7 +159,8 @@ The statistics engine is verified against authoritative references — see
 Run the checks (requires Node and Python):
 
 ```bash
-node tests/check.js      # tests vs an independent Python oracle
+node tests/check.js         # stats tests vs an independent Python oracle
+node tests/prism.check.js   # .prism import mapping (pure Node, no Python)
 ```
 
 ## Data formats
@@ -174,6 +189,7 @@ StatLab/
     survival.js         Kaplan-Meier, log-rank, Gehan-Breslow
     charts.js           SVG figure engine
     data.js             data model, CSV/clipboard parsing, samples
+    prism-import.js     reads GraphPad Prism .prism files (ZIP → tables + notes)
     guidance.js         test-selection decision tree + reference guidance
     app.js              UI controller (spreadsheet grid, analyses, graphs)
   tests/                verification harness (Node + Python)

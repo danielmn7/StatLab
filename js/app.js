@@ -123,7 +123,8 @@
             ? el('span', {}, 'A ', el('b', {}, 'two-factor'), ' layout: each ', el('b', {}, 'row'), ' is one level of the first factor (e.g. time), each ', el('b', {}, 'column group'), ' is a level of the second factor (e.g. genotype), and the ', el('b', {}, 'side-by-side subcolumns'), ' are replicates. Runs a two-way ANOVA.')
             : el('span', {}, 'Each column is a group/condition; each row is a replicate. ', el('b', {}, 'Paste from Excel or CSV with Ctrl+V'), ' — empty cells are ignored.')));
 
-    root.append(buildSheet(table));
+    const sheetCol = el('div', { class: 'sheet-col' });
+    sheetCol.append(buildSheet(table));
 
     const tools = el('div', { class: 'grid-tools' },
       el('button', { class: 'btn btn-sm', onclick: () => { table.addRow(); renderContent(); saveState(); } }, '＋ Row'),
@@ -137,8 +138,30 @@
         ? el('button', { class: 'btn btn-sm', title: 'Swap rows and columns', onclick: () => { table.transpose(); renderContent(); saveState(); toast('Transposed rows ↔ columns'); } }, '⇄ Transpose')
         : null,
       el('button', { class: 'btn btn-sm btn-ghost', onclick: () => { table.rows.forEach((r) => r.fill('')); renderContent(); saveState(); toast('Cleared'); } }, 'Clear data'));
-    root.append(tools);
-    if (table.type !== 'survival') root.append(el('div', { class: 'note', style: 'margin-top:6px;font-size:11.5px' }, 'Tip: paste with Ctrl+V, or Ctrl+Shift+V to paste transposed. Use ⇄ Transpose to flip existing data.'));
+    sheetCol.append(tools);
+    if (table.type !== 'survival') sheetCol.append(el('div', { class: 'note', style: 'margin-top:6px;font-size:11.5px' }, 'Tip: paste with Ctrl+V, or Ctrl+Shift+V to paste transposed. Use ⇄ Transpose to flip existing data.'));
+
+    root.append(el('div', { class: 'data-body' }, buildNotesPanel(table), sheetCol));
+  }
+
+  // ---------- per-dataset notes panel (left of the sheet) ----------
+  let notesCollapsed = false;
+  function buildNotesPanel(table) {
+    if (notesCollapsed) {
+      return el('div', { class: 'notes-panel collapsed' },
+        el('button', { class: 'notes-showbtn', title: 'Show notes', onclick: () => { notesCollapsed = false; renderContent(); } }, '📝'));
+    }
+    const ta = el('textarea', {
+      class: 'notes-area', spellcheck: 'true',
+      placeholder: 'Notes for this dataset…\n\nRecord observations, methods, or context here. Opening a .prism file drops what Prism recorded (which tests were run and their results) into this space automatically — then you can add your own notes below it.',
+      oninput: (e) => { table.notes = e.target.value; saveState(); },
+    });
+    ta.value = table.notes || '';
+    return el('div', { class: 'notes-panel' },
+      el('div', { class: 'notes-head' },
+        el('span', { class: 'notes-title' }, '📝 Notes'),
+        el('button', { class: 'notes-collapse', title: 'Hide notes', onclick: () => { notesCollapsed = true; renderContent(); } }, '⟨ Hide')),
+      ta);
   }
 
   function changeType(table, type) {
@@ -1457,6 +1480,50 @@
     saveState(); toast('Imported ' + table.rows.length + ' rows');
   }
 
+  // ---------- GraphPad Prism (.prism) import ----------
+  function openPrism() {
+    const inp = el('input', { type: 'file', accept: '.prism' });
+    inp.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) importPrismFile(f); });
+    inp.click();
+  }
+  async function importPrismFile(file) {
+    try {
+      toast('Reading ' + file.name + '…');
+      const buf = await file.arrayBuffer();
+      const { tableSpecs, warnings } = await PrismImport.parse(buf);
+      addPrismTables(tableSpecs, warnings, file.name);
+    } catch (err) {
+      toast('Could not open .prism file: ' + ((err && err.message) || err));
+    }
+  }
+  function addPrismTables(tableSpecs, warnings, fname) {
+    if (!tableSpecs || !tableSpecs.length) { toast('No data tables found in ' + (fname || 'that file')); return; }
+    const created = tableSpecs.map((s) => D.fromJSON(s));
+    created.forEach((t) => App.tables.push(t));
+    renderNavigator(); setActive('data', created[0].id); saveState();
+    const n = created.length;
+    let msg = 'Imported ' + n + ' table' + (n === 1 ? '' : 's') + ' from Prism';
+    if (warnings && warnings.length) { msg += ' · ' + warnings.length + ' note' + (warnings.length === 1 ? '' : 's'); console.warn('Prism import notes:', warnings); }
+    toast(msg);
+  }
+
+  // Accept a .prism (or .json project) file dropped anywhere on the window.
+  function initDragDrop() {
+    const allow = (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.items || []).some((it) => it.kind === 'file')) e.preventDefault(); };
+    document.addEventListener('dragover', allow);
+    document.addEventListener('drop', (e) => {
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      e.preventDefault();
+      if (/\.prism$/i.test(f.name)) importPrismFile(f);
+      else if (/\.json$/i.test(f.name)) {
+        const fr = new FileReader();
+        fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); renderNavigator(); renderContent(); saveState(); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
+        fr.readAsText(f);
+      }
+    });
+  }
+
   // ---------- guide modal ----------
   let guideStack = [];
   function openGuide() { guideStack = [G.START]; renderGuide(); showModal('modal-guide'); }
@@ -1510,7 +1577,7 @@
   function snapshot() {
     return {
       v: 1, counter: App.counter,
-      tables: App.tables.map((t) => ({ id: t.id, type: t.type, name: t.name, columns: t.columns, rows: t.rows, groupNames: t.groupNames, nsub: t.nsub, rowTitles: t.rowTitles })),
+      tables: App.tables.map((t) => ({ id: t.id, type: t.type, name: t.name, notes: t.notes, columns: t.columns, rows: t.rows, groupNames: t.groupNames, nsub: t.nsub, rowTitles: t.rowTitles })),
       results: App.results.map((r) => ({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, graphId: r.graphId })),
       graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, spec: g.spec })),
       active: App.active,
@@ -1580,6 +1647,7 @@
     $('#btn-new').addEventListener('click', newTable);
     $('#btn-import').addEventListener('click', openImport);
     $('#btn-example').addEventListener('click', () => showExampleMenu());
+    $('#btn-prism').addEventListener('click', openPrism);
     $('#btn-save').addEventListener('click', saveProject);
     $('#btn-open').addEventListener('click', openProjectFile);
     $('#btn-guide').addEventListener('click', openGuide);
@@ -1590,6 +1658,7 @@
     $$('[data-close]').forEach((b) => b.addEventListener('click', (e) => { const m = e.target.closest('.modal-backdrop'); if (m) m.hidden = true; }));
     $$('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; }));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $$('.modal-backdrop').forEach((m) => m.hidden = true); });
+    initDragDrop();
     const saved = peekSavedState();
     renderNavigator(); renderContent();
     if (saved) showRestorePrompt(saved);
@@ -1622,6 +1691,16 @@
     newTable: () => { newTable(); },
     loadExample: (key) => { loadExample(key); },
     openGuide: () => { openGuide(); },
+    // Open a .prism file passed from the native shell as a base64 string.
+    openPrismBase64: async (b64) => {
+      try {
+        const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const { tableSpecs, warnings } = await PrismImport.parse(bytes.buffer);
+        addPrismTables(tableSpecs, warnings, 'Prism file');
+        return tableSpecs.length;
+      } catch (e) { return -1; }
+    },
     hasActiveGraph: () => !!(App.active && App.active.view === 'graph'),
     activeGraphSVG: () => { const g = activeObj(); return (App.active && App.active.view === 'graph' && g) ? buildSVG(g.spec) : null; },
     activeGraphName: () => { const g = activeObj(); return g ? (g.name || 'figure') : 'figure'; },

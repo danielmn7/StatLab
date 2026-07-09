@@ -47,6 +47,21 @@ async function saveProject() {
   fs.writeFileSync(filePath, json, 'utf8');
 }
 
+async function openPrism() {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Open GraphPad Prism file',
+    filters: [{ name: 'GraphPad Prism', extensions: ['prism'] }],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) return;
+  try {
+    const b64 = fs.readFileSync(filePaths[0]).toString('base64');
+    const n = await run(`window.StatLab.openPrismBase64(${JSON.stringify(b64)})`);
+    if (n < 0) dialog.showErrorBox('Open failed', 'That file could not be read as a .prism file.');
+    else win.webContents.focus();
+  } catch (e) { dialog.showErrorBox('Open failed', String(e)); }
+}
+
 async function importData() {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Import data (CSV / TSV / text)',
@@ -88,6 +103,7 @@ function buildMenu() {
         { label: 'Open Project…', accelerator: 'CmdOrCtrl+O', click: openProject },
         { label: 'Save Project…', accelerator: 'CmdOrCtrl+S', click: saveProject },
         { type: 'separator' },
+        { label: 'Open Prism File…', accelerator: 'CmdOrCtrl+Shift+O', click: openPrism },
         { label: 'Import Data…', accelerator: 'CmdOrCtrl+I', click: importData },
         { label: 'Export Figure…', accelerator: 'CmdOrCtrl+E', click: exportFigure },
         { type: 'separator' },
