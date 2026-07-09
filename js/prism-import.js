@@ -91,6 +91,22 @@ const PrismImport = (function () {
   // ============================================================= interpret (pure)
   const gj = (files, path) => { const t = files[path]; if (t == null) return null; try { return JSON.parse(t); } catch (e) { return null; } };
 
+  // Prism stores titles either as a plain string or as a rich-text object
+  // (e.g. { rtf, string } — the same shape used for floating-note text). Pull
+  // out the plain-text string so column/group headings don't become
+  // "[object Object]".
+  function titleString(t) {
+    if (t == null) return '';
+    if (typeof t === 'string') return t.trim();
+    if (typeof t === 'object') {
+      // common rich-text carriers, in preference order
+      const s = t.string != null ? t.string : (t.text != null ? t.text : (t.value != null ? t.value : t.title));
+      if (s != null && s !== t) return titleString(s);
+      return '';
+    }
+    return String(t).trim();
+  }
+
   // Minimal, quote-aware CSV parse (Prism data.csv has no header row).
   function csvParse(text) {
     text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n+$/, '');
@@ -158,7 +174,7 @@ const PrismImport = (function () {
         }
       });
       if (!notes.length && sh.alertText) notes.push(cleanText(sh.alertText));
-      return { uid, title: sh.title || 'Analysis', inputUids, noteText: notes.join('\n') };
+      return { uid, title: titleString(sh.title) || 'Analysis', inputUids, noteText: notes.join('\n') };
     }).filter(Boolean);
   }
 
@@ -195,7 +211,7 @@ const PrismImport = (function () {
   function buildTableSpec(uid, sheet, files, warnings) {
     const table = sheet.table;
     const fmt = table.format;
-    const name = sheet.title || 'Data';
+    const name = titleString(sheet.title) || 'Data';
     const rows = csvParse(files['data/tables/' + table.uid + '/data.csv'] || '');
     const cell = (r, c) => { const row = rows[r]; const v = row && row[c]; return v == null ? '' : String(v).trim(); };
 
@@ -214,7 +230,7 @@ const PrismImport = (function () {
     const nRows = lastRow + 1;
 
     if (fmt === 'grouped') {
-      const groupNames = spans.map((sp, i) => (sp.set.title || ('Group ' + String.fromCharCode(65 + i))));
+      const groupNames = spans.map((sp, i) => (titleString(sp.set.title) || ('Group ' + String.fromCharCode(65 + i))));
       const rowTitles = [];
       const out = [];
       for (let r = 0; r < nRows; r++) {
@@ -227,8 +243,8 @@ const PrismImport = (function () {
     }
 
     if (fmt === 'xy') {
-      const xName = (hasX && gj(files, 'data/sets/' + table.xDataSet + '.json') || {}).title || 'X';
-      const cols = [{ name: xName, role: 'x' }].concat(spans.map((sp, i) => ({ name: sp.set.title || ('Y' + (i + 1)), role: 'y' })));
+      const xName = titleString((hasX && gj(files, 'data/sets/' + table.xDataSet + '.json') || {}).title) || 'X';
+      const cols = [{ name: xName, role: 'x' }].concat(spans.map((sp, i) => ({ name: titleString(sp.set.title) || ('Y' + (i + 1)), role: 'y' })));
       const out = [];
       for (let r = 0; r < nRows; r++) {
         const xv = cell(r, xCol < 0 ? 0 : xCol);
@@ -251,7 +267,7 @@ const PrismImport = (function () {
       // status code (1 = event/death, 0 = censored) for subjects in that group.
       const out = [];
       spans.forEach((sp) => {
-        const group = sp.set.title || 'Group';
+        const group = titleString(sp.set.title) || 'Group';
         for (let r = 0; r < nRows; r++) {
           const status = cell(r, leading + sp.lo);
           if (status === '') continue;
@@ -266,7 +282,7 @@ const PrismImport = (function () {
     // Column table (and any unrecognised format): each dataSet is a group column;
     // stack its column(s) into one list of values.
     if (fmt !== 'column') warnings.push('Table "' + name + '" uses an unfamiliar Prism format ("' + fmt + '"); imported its columns as column data.');
-    const cols = spans.map((sp, i) => ({ name: sp.set.title || ('Group ' + String.fromCharCode(65 + i)), role: 'group' }));
+    const cols = spans.map((sp, i) => ({ name: titleString(sp.set.title) || ('Group ' + String.fromCharCode(65 + i)), role: 'group' }));
     const colValues = spans.map((sp) => {
       const vals = [];
       for (let r = 0; r < nRows; r++) for (let c = sp.lo; c <= sp.hi; c++) { const v = cell(r, leading + c); if (v !== '') vals.push(v); }
@@ -323,7 +339,7 @@ const PrismImport = (function () {
         spec.notes = buildNotes(uid, sheet, analyses, tableSpecs.length === 0 ? projectInfo : '');
         tableSpecs.push(spec);
       } catch (e) {
-        warnings.push('Could not import table "' + (sheet.title || uid) + '": ' + (e && e.message || e));
+        warnings.push('Could not import table "' + (titleString(sheet.title) || uid) + '": ' + (e && e.message || e));
       }
     });
     if (!tableSpecs.length) warnings.push('No data tables were found in this .prism file.');
