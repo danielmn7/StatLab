@@ -12,6 +12,7 @@ const DataLib = (function () {
       this.id = uid('tbl_');
       this.type = type; // 'column' | 'xy' | 'survival'
       this.name = name || defaultName(type);
+      this.notes = ''; // free-text notes for this dataset (shown beside the sheet)
       this.columns = [];
       this.rows = [];
       if (type === 'column') this.setColumns(['Group A', 'Group B']);
@@ -336,6 +337,7 @@ const DataLib = (function () {
     t.id = o.id || uid('tbl_');
     t.name = o.name;
     t.type = o.type;
+    t.notes = o.notes || '';
     if (o.type === 'grouped') {
       t.groupNames = o.groupNames || ['Group A', 'Group B'];
       t.nsub = o.nsub || 3;
