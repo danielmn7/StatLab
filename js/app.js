@@ -820,7 +820,9 @@
           el('div', { class: 'assump ' + (anyNon ? 'fail' : 'pass') }, anyNon ? '✗ At least one test rejects normality — consider a non-parametric test.' : '✓ Consistent with a normal distribution — parametric tests are reasonable.'));
       });
       const node = card('Normality tests', ...blocks, groupedUnitNote(table), el('div', { class: 'note' }, '✓ = consistent with normal (p ≥ 0.05); ✗ = deviates from normal (p < 0.05). With large n, tiny deviations become significant — also inspect the plot.'));
-      return wrap('Normality tests', node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' }));
+      // Diagnostic test — no auto-graph (issue #34): don't clutter the graphs workspace
+      // with an unrequested column scatter. Users can still make one via ◧ Graph.
+      return wrap('Normality tests', node, null);
     }
 
     if (kind === 'grubbs') {
@@ -842,7 +844,9 @@
       const node = card("Grubbs' outlier test" + (spec.iterative ? ' (iterative ESD)' : ''), ...blocks,
         groupedUnitNote(table),
         el('div', { class: 'note' }, 'Grubbs assumes the rest of the data are approximately normal. Investigate outliers before deleting them.'));
-      return wrap("Grubbs' outlier test", node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' }));
+      // Diagnostic test — no auto-graph (issue #34): don't clutter the graphs workspace
+      // with an unrequested column scatter. Users can still make one via ◧ Graph.
+      return wrap("Grubbs' outlier test", node, null);
     }
 
     if (kind === 'survival') {
