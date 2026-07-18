@@ -42,6 +42,15 @@ body {
 .brand-sub { font-size: 11px; color: var(--muted); margin-top: -2px; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex: 1; }
 .toolbar-spacer { flex: 1; }
+.project-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--muted); padding: 4px 10px;
+  border: 1px solid var(--line); border-radius: 999px; background: #f8fafc;
+}
+.project-file::before { content: "📄"; font-size: 12px; }
+.project-file.is-saved { color: var(--ink); }
+.project-file.is-unsaved { font-style: italic; }
 
 .btn {
   font-family: inherit; font-size: 13px; font-weight: 500;
