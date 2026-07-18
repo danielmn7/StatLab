@@ -1,9 +1,12 @@
 // StatLab — Electron main process. Wraps the web app as a native desktop application.
-const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, shell, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
 let win;
+// Absolute path of the project file currently being edited, or null when the
+// workspace has never been saved. "Save" writes here; "Save As" always prompts.
+let currentProjectPath = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -13,7 +16,11 @@ function createWindow() {
     minHeight: 600,
     title: 'StatLab',
     backgroundColor: '#f4f6f9',
-    webPreferences: { contextIsolation: true, spellcheck: false },
+    webPreferences: {
+      contextIsolation: true,
+      spellcheck: false,
+      preload: path.join(__dirname, 'preload.js'),
+    },
   });
   win.loadFile(path.join(__dirname, '..', 'index.html'));
   buildMenu();
@@ -21,6 +28,15 @@ function createWindow() {
 
 // Run JS in the renderer's page context and get the result back.
 function run(js) { return win.webContents.executeJavaScript(js, true); }
+
+// Record the active project file and reflect its name in the window title and
+// the in-app UI. Passing null marks the workspace as an unsaved project.
+function setCurrentProject(filePath) {
+  currentProjectPath = filePath || null;
+  const name = currentProjectPath ? path.basename(currentProjectPath) : null;
+  win.setTitle(name ? `StatLab — ${name}` : 'StatLab');
+  run(`window.StatLab.setProjectFile(${JSON.stringify(name)})`).catch(() => {});
+}
 
 async function openProject() {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
@@ -32,20 +48,32 @@ async function openProject() {
   try {
     const text = fs.readFileSync(filePaths[0], 'utf8');
     const ok = await run(`window.StatLab.loadStateJSON(${JSON.stringify(text)})`);
-    if (!ok) dialog.showErrorBox('Open failed', 'That file is not a valid StatLab project.');
+    if (!ok) { dialog.showErrorBox('Open failed', 'That file is not a valid StatLab project.'); return; }
+    setCurrentProject(filePaths[0]);
   } catch (e) { dialog.showErrorBox('Open failed', String(e)); }
 }
 
-async function saveProject() {
+// Save to the current project file, or fall back to "Save As" when there isn't
+// one yet. Pass forceDialog=true to always prompt for a new location.
+async function saveProject(forceDialog) {
   const json = await run('window.StatLab.getStateJSON()');
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: 'Save StatLab project',
-    defaultPath: 'project.statlab.json',
-    filters: [{ name: 'StatLab Project', extensions: ['json'] }],
-  });
-  if (canceled || !filePath) return;
-  fs.writeFileSync(filePath, json, 'utf8');
+  let filePath = currentProjectPath;
+  if (forceDialog || !filePath) {
+    const res = await dialog.showSaveDialog(win, {
+      title: forceDialog ? 'Save StatLab project as…' : 'Save StatLab project',
+      defaultPath: filePath || 'project.statlab.json',
+      filters: [{ name: 'StatLab Project', extensions: ['json'] }],
+    });
+    if (res.canceled || !res.filePath) return;
+    filePath = res.filePath;
+  }
+  try {
+    fs.writeFileSync(filePath, json, 'utf8');
+    setCurrentProject(filePath);
+  } catch (e) { dialog.showErrorBox('Save failed', String(e)); }
 }
+
+function saveProjectAs() { return saveProject(true); }
 
 async function openPrism() {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
@@ -101,7 +129,8 @@ function buildMenu() {
         { label: 'New Table', accelerator: 'CmdOrCtrl+N', click: () => run('window.StatLab.newTable()') },
         { type: 'separator' },
         { label: 'Open Project…', accelerator: 'CmdOrCtrl+O', click: openProject },
-        { label: 'Save Project…', accelerator: 'CmdOrCtrl+S', click: saveProject },
+        { label: 'Save Project', accelerator: 'CmdOrCtrl+S', click: () => saveProject(false) },
+        { label: 'Save Project As…', accelerator: 'CmdOrCtrl+Shift+S', click: saveProjectAs },
         { type: 'separator' },
         { label: 'Open Prism File…', accelerator: 'CmdOrCtrl+Shift+O', click: openPrism },
         { label: 'Import Data…', accelerator: 'CmdOrCtrl+I', click: importData },
@@ -127,6 +156,12 @@ function buildMenu() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// Toolbar buttons in the renderer call these so the in-app controls share the
+// same native save-with-path behaviour as the File menu.
+ipcMain.handle('project:save', () => saveProject(false));
+ipcMain.handle('project:saveAs', () => saveProject(true));
+ipcMain.handle('project:open', () => openProject());
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

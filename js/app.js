@@ -49,6 +49,8 @@
     tables: [], results: [], graphs: [],
     active: null, // {view:'data'|'result'|'graph', id}
     counter: 1,
+    projectFileName: null,  // display name of the open project file, or null when unsaved
+    projectFileHandle: null, // File System Access handle (browser) so Save can overwrite
   };
   function activeObj() {
     if (!App.active) return null;
@@ -1640,13 +1642,77 @@
     $('#restore-fresh').onclick = () => { modal.hidden = true; toast('Started fresh — your previous session is still saved'); };
     modal.hidden = false;
   }
-  function saveProject() { download('statlab_project.json', JSON.stringify(snapshot()), 'application/json'); toast('Project file saved'); }
-  function openProjectFile() {
+  // Reflect the current project file name in the toolbar and window title.
+  function renderProjectFile() {
+    const elp = $('#project-file'); if (!elp) return;
+    const name = App.projectFileName;
+    elp.textContent = name || 'Unsaved project';
+    elp.title = name ? 'Current project file: ' + name : 'This project has not been saved to a file yet';
+    elp.classList.toggle('is-saved', !!name);
+    elp.classList.toggle('is-unsaved', !name);
+    document.title = (name ? name + ' — ' : '') + 'StatLab — Scientific Statistics & Figures';
+  }
+  function setProjectFile(name, handle) {
+    App.projectFileName = name || null;
+    if (handle !== undefined) App.projectFileHandle = handle;
+    renderProjectFile();
+  }
+
+  const PROJECT_JSON = () => JSON.stringify(snapshot(), null, 2);
+  const FS_TYPES = [{ description: 'StatLab Project', accept: { 'application/json': ['.json'] } }];
+  async function writeToHandle(handle, text) {
+    const w = await handle.createWritable();
+    await w.write(text); await w.close();
+  }
+
+  // Save: in the desktop app defer to the native handler (writes to the open
+  // file, prompting only when there isn't one). In the browser, overwrite the
+  // open file via its handle, falling back to Save As when there is none.
+  async function saveProject() {
+    if (window.desktop) { window.desktop.saveProject(); return; }
+    if (App.projectFileHandle && window.showSaveFilePicker) {
+      try { await writeToHandle(App.projectFileHandle, PROJECT_JSON()); toast('Saved ' + App.projectFileName); return; }
+      catch (e) { /* handle went stale — fall through to Save As */ }
+    }
+    return saveProjectAs();
+  }
+
+  // Save As: always choose a new destination.
+  async function saveProjectAs() {
+    if (window.desktop) { window.desktop.saveProjectAs(); return; }
+    const text = PROJECT_JSON();
+    if (window.showSaveFilePicker) {
+      let handle;
+      try { handle = await window.showSaveFilePicker({ suggestedName: App.projectFileName || 'project.statlab.json', types: FS_TYPES }); }
+      catch (e) { return; } // user dismissed the picker
+      try { await writeToHandle(handle, text); setProjectFile(handle.name, handle); toast('Saved ' + handle.name); }
+      catch (e) { toast('Save failed'); }
+    } else {
+      // Older browsers without the File System Access API: download a copy.
+      const name = App.projectFileName || 'statlab_project.json';
+      download(name, text, 'application/json'); setProjectFile(name, null); toast('Project file saved');
+    }
+  }
+
+  async function openProjectFile() {
+    if (window.desktop) { window.desktop.openProject(); return; }
+    if (window.showOpenFilePicker) {
+      let handle;
+      try { [handle] = await window.showOpenFilePicker({ types: FS_TYPES, multiple: false }); }
+      catch (e) { return; } // user dismissed the picker
+      try {
+        const text = await (await handle.getFile()).text();
+        restoreSnapshot(JSON.parse(text)); renderNavigator(); renderContent(); saveState();
+        setProjectFile(handle.name, handle); toast('Opened ' + handle.name);
+      } catch (err) { toast('Invalid project file'); }
+      return;
+    }
+    // Fallback: <input type=file> (no writable handle, so later Save acts as Save As).
     const inp = el('input', { type: 'file', accept: '.json,application/json' });
     inp.addEventListener('change', (e) => {
       const f = e.target.files[0]; if (!f) return;
       const fr = new FileReader();
-      fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); renderNavigator(); renderContent(); saveState(); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
+      fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); renderNavigator(); renderContent(); saveState(); setProjectFile(f.name, null); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
       fr.readAsText(f);
     });
     inp.click();
@@ -1666,6 +1732,7 @@
     $('#btn-example').addEventListener('click', () => showExampleMenu());
     $('#btn-prism').addEventListener('click', openPrism);
     $('#btn-save').addEventListener('click', saveProject);
+    $('#btn-saveas').addEventListener('click', saveProjectAs);
     $('#btn-open').addEventListener('click', openProjectFile);
     $('#btn-guide').addEventListener('click', openGuide);
     $('#analyze-go').addEventListener('click', runAnalyzeFromModal);
@@ -1677,7 +1744,7 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $$('.modal-backdrop').forEach((m) => m.hidden = true); });
     initDragDrop();
     const saved = peekSavedState();
-    renderNavigator(); renderContent();
+    renderNavigator(); renderContent(); renderProjectFile();
     if (saved) showRestorePrompt(saved);
   }
 
@@ -1696,8 +1763,10 @@
 
   // API surface for the Electron desktop shell (native menu → these calls)
   window.StatLab = {
-    getStateJSON: () => JSON.stringify(snapshot()),
+    getStateJSON: () => JSON.stringify(snapshot(), null, 2),
     loadStateJSON: (json) => { try { restoreSnapshot(JSON.parse(json)); renderNavigator(); renderContent(); saveState(); return true; } catch (e) { return false; } },
+    // Called by the desktop shell after a native save/open to show the file name.
+    setProjectFile: (name) => { setProjectFile(name); },
     importText: (text, type) => {
       const parsed = D.parseDelimited(text);
       const useHeader = D.looksLikeHeader(parsed.rows[0] || []);
