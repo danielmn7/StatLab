@@ -354,3 +354,18 @@ details.help .help-body ul { margin: 6px 0; padding-left: 18px; }
   .graph-controls { width: auto; border-left: none; border-top: 1px solid var(--line); padding-left: 0; padding-top: 16px; }
   .test-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- right-click context menu (column / group headers) ---- */
+.ctx-menu {
+  position: fixed; z-index: 50; min-width: 156px; padding: 5px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 8px; box-shadow: var(--shadow-lg); font-size: 13px;
+}
+.ctx-item {
+  padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  color: var(--ink); white-space: nowrap; user-select: none;
+}
+.ctx-item:hover { background: var(--accent-soft); color: var(--accent-dark); }
+.ctx-item.danger { color: var(--danger); }
+.ctx-item.danger:hover { background: #fdecec; color: var(--danger); }
+.ctx-sep { height: 1px; margin: 5px 6px; background: var(--line); }
