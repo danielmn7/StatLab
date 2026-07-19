@@ -201,9 +201,17 @@
     hr.append(el('th', { class: 'rowhead' }, '#'));
     table.columns.forEach((col, ci) => {
       const roleLabel = table.type === 'xy' ? (col.role === 'x' ? 'X' : 'Y' + ci) : table.type === 'survival' ? col.role : '';
-      const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column',
+      const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column (right-click for options)',
+        onfocus: (e) => { e.target.dataset.orig = col.name; },
         oninput: (e) => { col.name = e.target.value; saveState(); },
+        onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== col.name) { propagateColumnRename(table, orig, col.name, ci); saveState(); } },
         ondblclick: (e) => e.target.select() });
+      nameInput.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const items = [{ label: '✎ Rename', onClick: () => { nameInput.focus(); nameInput.select(); } }];
+        if (table.columns.length > 1) items.push({ sep: true }, { label: '🗑 Delete column', danger: true, onClick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); renderContent(); saveState(); } } });
+        showContextMenu(e.clientX, e.clientY, items);
+      });
       const colhead = el('div', { class: 'colhead' }, nameInput);
       if (roleLabel) colhead.append(el('div', { class: 'colrole' }, roleLabel));
       const th = el('th', {}, colhead);
@@ -222,10 +230,18 @@
     hr1.append(el('th', { class: 'rowhead', rowspan: 2 }, '#'));
     hr1.append(el('th', { rowspan: 2, class: 'rowtitle-head' }, el('div', { class: 'colrole', style: 'padding:6px 8px' }, 'Row factor')));
     table.groupNames.forEach((gn, gi) => {
-      const th = el('th', { colspan: n, style: 'text-align:center' },
-        el('input', { class: 'colname', value: gn, title: 'Click to rename this group',
-          oninput: (e) => { table.groupNames[gi] = e.target.value; saveState(); },
-          ondblclick: (e) => e.target.select() }));
+      const gInput = el('input', { class: 'colname', value: gn, title: 'Click to rename this group (right-click for options)',
+        onfocus: (e) => { e.target.dataset.orig = table.groupNames[gi]; },
+        oninput: (e) => { table.groupNames[gi] = e.target.value; saveState(); },
+        onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== table.groupNames[gi]) { propagateGroupedRename(table, orig, table.groupNames[gi]); saveState(); } },
+        ondblclick: (e) => e.target.select() });
+      gInput.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const items = [{ label: '✎ Rename', onClick: () => { gInput.focus(); gInput.select(); } }];
+        if (g > 2) items.push({ sep: true }, { label: '🗑 Delete group', danger: true, onClick: () => { if (confirm('Delete group "' + table.groupNames[gi] + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } } });
+        showContextMenu(e.clientX, e.clientY, items);
+      });
+      const th = el('th', { colspan: n, style: 'text-align:center' }, gInput);
       if (g > 2) {
         th.append(el('button', { class: 'coldel', title: 'Delete this group', tabindex: '-1',
           onclick: () => { if (confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } } }, '×'));
@@ -1035,6 +1051,62 @@
     if (sw.error) return null;
     return el('div', { class: 'assump ' + (sw.p < 0.05 ? 'fail' : 'pass') },
       sw.p < 0.05 ? '⚠ Residuals deviate from normal (Shapiro-Wilk p < 0.05). Two-way ANOVA is fairly robust, but interpret with care.' : '✓ Residuals are consistent with normality (Shapiro-Wilk p ≥ 0.05).');
+  }
+
+  // ---------- column / group renaming ----------
+  // Renaming happens inline via the header inputs (click, or right-click →
+  // Rename); on change we propagate the new name into any graphs already
+  // derived from this table so they reflect it too.
+  // Rewrite "A vs B"-style comparison labels when one side is renamed.
+  function renameInComparison(name, oldName, newName) {
+    if (typeof name !== 'string') return name;
+    return name.split(' vs ').map((p) => (p === oldName ? newName : p)).join(' vs ');
+  }
+  // Update every graph derived from this table so it reflects the new column name.
+  function propagateColumnRename(table, oldName, newName, ci) {
+    App.graphs.forEach((gr) => {
+      if (gr.tableId !== table.id) return;
+      const spec = gr.spec || {}; const o = spec.opts || {};
+      if (Array.isArray(spec.groups)) spec.groups.forEach((g) => { if (g.name === oldName) g.name = newName; });
+      if (o.labelA === oldName) o.labelA = newName;
+      if (o.labelB === oldName) o.labelB = newName;
+      if (spec.chartType === 'xy') {
+        if (ci === 0 && o.xLabel === oldName) o.xLabel = newName;
+        if (ci === 1 && o.yLabel === oldName) o.yLabel = newName;
+      }
+      if (Array.isArray(o.sig)) o.sig.forEach((s) => { if (s && s.name) s.name = renameInComparison(s.name, oldName, newName); });
+    });
+  }
+  // Grouped tables: the renamed group is a column factor level.
+  function propagateGroupedRename(table, oldName, newName) {
+    App.graphs.forEach((gr) => {
+      if (gr.tableId !== table.id) return;
+      const spec = gr.spec || {};
+      if (Array.isArray(spec.colNames)) spec.colNames = spec.colNames.map((n) => (n === oldName ? newName : n));
+      // Column-style analyses of grouped data name units "group · row".
+      if (Array.isArray(spec.groups)) spec.groups.forEach((g) => {
+        if (g.name === oldName) g.name = newName;
+        else if (typeof g.name === 'string' && g.name.startsWith(oldName + ' · ')) g.name = newName + g.name.slice(oldName.length);
+      });
+    });
+  }
+
+  // Lightweight popup menu used by header right-clicks. items:
+  // [{ label, onClick, danger }] with { sep: true } for separators.
+  function showContextMenu(x, y, items) {
+    const existing = document.getElementById('ctx-menu'); if (existing) existing.remove();
+    const menu = el('div', { id: 'ctx-menu', class: 'ctx-menu' });
+    items.forEach((it) => {
+      if (it.sep) { menu.append(el('div', { class: 'ctx-sep' })); return; }
+      menu.append(el('div', { class: 'ctx-item' + (it.danger ? ' danger' : ''), onclick: () => { menu.remove(); it.onClick(); } }, it.label));
+    });
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function h(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', h); }
+    }), 0);
   }
 
   // ---------- graph spec builders ----------
