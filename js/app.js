@@ -64,7 +64,9 @@
   function renderNavigator() {
     const mk = (item, view, icon) => el('li', {
       class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
+      title: 'Right-click for options',
       onclick: () => setActive(view, item.id),
+      oncontextmenu: (e) => navContextMenu(e, item, view),
     }, el('span', { class: 'ico' }, icon), item.name);
     const tl = $('#nav-tables'); tl.innerHTML = '';
     if (!App.tables.length) tl.append(el('li', { class: 'nav-empty' }, 'No tables yet'));
@@ -112,7 +114,8 @@
     const actions = el('div', { class: 'view-actions' },
       el('span', { class: 'muted', style: 'align-self:center;font-size:12px' }, 'Type:'), typeSel,
       el('button', { class: 'btn btn-accent', onclick: () => openAnalyze(table) }, '∑ Analyze'),
-      el('button', { class: 'btn', onclick: () => quickGraph(table) }, '◧ Graph'));
+      el('button', { class: 'btn', onclick: () => quickGraph(table) }, '◧ Graph'),
+      el('button', { class: 'btn btn-ghost', title: 'Delete this table and its analyses and graphs', onclick: () => deleteTable(table.id) }, '🗑 Delete'));
     head.append(actions);
     root.append(head);
 
@@ -1065,7 +1068,7 @@
       el('div', { class: 'view-actions' },
         result.graphId ? el('button', { class: 'btn', onclick: () => setActive('graph', result.graphId) }, '◧ View graph') : null,
         el('button', { class: 'btn', onclick: () => copyResultText(result) }, '⧉ Copy'),
-        el('button', { class: 'btn btn-ghost', onclick: () => { App.results = App.results.filter((r) => r !== result); App.active = null; renderNavigator(); renderContent(); saveState(); } }, '🗑 Delete')));
+        el('button', { class: 'btn btn-ghost', onclick: () => deleteResult(result.id) }, '🗑 Delete')));
     root.append(head);
     root.append(result.html);
   }
@@ -1090,7 +1093,7 @@
         srcTable ? el('button', { class: 'btn', onclick: () => setActive('data', srcTable.id) }, '▦ Data') : null,
         el('button', { class: 'btn', onclick: () => exportSVG(graph) }, '⭳ SVG'),
         el('button', { class: 'btn', onclick: () => exportPNG(graph) }, '⭳ PNG'),
-        el('button', { class: 'btn btn-ghost', onclick: () => { App.graphs = App.graphs.filter((g) => g !== graph); App.active = null; renderNavigator(); renderContent(); saveState(); } }, '🗑 Delete')));
+        el('button', { class: 'btn btn-ghost', onclick: () => deleteGraph(graph.id) }, '🗑 Delete')));
     root.append(head);
 
     const wrap = el('div', { class: 'graph-wrap' });
@@ -1720,6 +1723,87 @@
       fr.readAsText(f);
     });
     inp.click();
+  }
+
+  // ---------- deletion ----------
+  // How many results/graphs were derived from a given table (they store its id).
+  function relatedCounts(tableId) {
+    return {
+      results: App.results.filter((r) => r.tableId === tableId).length,
+      graphs: App.graphs.filter((g) => g.tableId === tableId).length,
+    };
+  }
+  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  // After removing whatever the user was viewing, fall back to another item so
+  // the content pane is never left pointing at something that no longer exists.
+  function afterDelete() {
+    if (!App.active || !activeObj()) {
+      App.active = App.tables[0] ? { view: 'data', id: App.tables[0].id }
+        : App.results[0] ? { view: 'result', id: App.results[0].id }
+          : App.graphs[0] ? { view: 'graph', id: App.graphs[0].id } : null;
+    }
+    renderNavigator(); renderContent(); saveState();
+  }
+  // Delete a data table together with every result and graph derived from it.
+  function deleteTable(id, opts) {
+    const t = tableById(id); if (!t) return;
+    const c = relatedCounts(id);
+    if (!(opts && opts.skipConfirm)) {
+      const extra = [];
+      if (c.results) extra.push(plural(c.results, 'result'));
+      if (c.graphs) extra.push(plural(c.graphs, 'graph'));
+      const tail = extra.length ? ' and its ' + extra.join(' and ') : '';
+      if (!confirm('Delete data table "' + t.name + '"' + tail + '? This cannot be undone.')) return;
+    }
+    App.tables = App.tables.filter((x) => x.id !== id);
+    App.results = App.results.filter((r) => r.tableId !== id);
+    App.graphs = App.graphs.filter((g) => g.tableId !== id);
+    afterDelete();
+    toast('Deleted "' + t.name + '"' + (c.results + c.graphs ? ' and related analyses/graphs' : ''));
+  }
+  function deleteResult(id) {
+    const r = App.results.find((x) => x.id === id); if (!r) return;
+    App.results = App.results.filter((x) => x.id !== id);
+    afterDelete(); toast('Deleted result');
+  }
+  function deleteGraph(id) {
+    const g = App.graphs.find((x) => x.id === id); if (!g) return;
+    App.graphs = App.graphs.filter((x) => x.id !== id);
+    // a result may link to this graph via graphId — drop the now-dangling link
+    App.results.forEach((r) => { if (r.graphId === id) delete r.graphId; });
+    afterDelete(); toast('Deleted graph');
+  }
+
+  // ---------- lightweight context menu (right-click on navigator items) ----------
+  function showContextMenu(x, y, items) {
+    const existing = $('#ctx-menu'); if (existing) existing.remove();
+    const menu = el('div', { id: 'ctx-menu', class: 'ctx-menu' });
+    items.forEach((it) => {
+      if (it.sep) { menu.append(el('div', { class: 'ctx-sep' })); return; }
+      menu.append(el('div', { class: 'ctx-item' + (it.danger ? ' danger' : ''), onclick: () => { menu.remove(); it.onClick(); } }, it.label));
+    });
+    document.body.append(menu);
+    // keep the menu inside the viewport
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function h(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', h); }
+    }), 0);
+  }
+  function navContextMenu(e, item, view) {
+    e.preventDefault();
+    const items = [{ label: 'Open', onClick: () => setActive(view, item.id) }, { sep: true }];
+    if (view === 'data') {
+      const c = relatedCounts(item.id);
+      const tail = (c.results + c.graphs) ? ' & related' : '';
+      items.push({ label: '🗑 Delete table' + tail, danger: true, onClick: () => deleteTable(item.id) });
+    } else if (view === 'result') {
+      items.push({ label: '🗑 Delete result', danger: true, onClick: () => deleteResult(item.id) });
+    } else {
+      items.push({ label: '🗑 Delete graph', danger: true, onClick: () => deleteGraph(item.id) });
+    }
+    showContextMenu(e.clientX, e.clientY, items);
   }
 
   // ---------- top-level actions ----------
