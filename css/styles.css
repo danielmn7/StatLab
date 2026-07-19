@@ -89,6 +89,18 @@ body {
 .nav-item .ico { font-size: 13px; opacity: .8; }
 .nav-empty { padding: 4px 16px 4px 30px; color: var(--muted); font-size: 12px; font-style: italic; }
 
+/* right-click context menu (navigator items) */
+.ctx-menu {
+  position: fixed; z-index: 200; min-width: 170px; padding: 5px;
+  background: var(--panel); border: 1px solid var(--line-strong);
+  border-radius: 10px; box-shadow: var(--shadow-lg);
+}
+.ctx-item { padding: 7px 12px; font-size: 13px; border-radius: 7px; cursor: pointer; color: var(--ink); white-space: nowrap; }
+.ctx-item:hover { background: #f1f5f9; }
+.ctx-item.danger { color: var(--danger); }
+.ctx-item.danger:hover { background: #fef2f2; }
+.ctx-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+
 .content { flex: 1; overflow: auto; padding: 22px 26px; min-width: 0; }
 
 /* ---------- data view ---------- */
