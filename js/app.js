@@ -115,7 +115,9 @@
       const hasGraph = isTable && App.graphs.some((g) => g.tableId === item.id);
       return el('li', {
         class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
+        title: 'Right-click for options',
         onclick: () => setActive(view, item.id),
+        oncontextmenu: (e) => navContextMenu(e, item, view),
       }, el('span', { class: 'ico' }, icon), item.name,
         hasGraph ? el('span', { class: 'graph-status', title: 'This table has a graph' }, '✓') : null);
     };
@@ -165,7 +167,8 @@
     const actions = el('div', { class: 'view-actions' },
       el('span', { class: 'muted', style: 'align-self:center;font-size:12px' }, 'Type:'), typeSel,
       el('button', { class: 'btn btn-accent', onclick: () => openAnalyze(table) }, '∑ Analyze'),
-      el('button', { class: 'btn', onclick: () => quickGraph(table) }, '◧ Graph'));
+      el('button', { class: 'btn', onclick: () => quickGraph(table) }, '◧ Graph'),
+      el('button', { class: 'btn btn-ghost', title: 'Delete this table and its analyses and graphs', onclick: () => deleteTable(table.id) }, '🗑 Delete'));
     head.append(actions);
     root.append(head);
 
@@ -251,9 +254,17 @@
     hr.append(el('th', { class: 'rowhead' }, '#'));
     table.columns.forEach((col, ci) => {
       const roleLabel = table.type === 'xy' ? (col.role === 'x' ? 'X' : 'Y' + ci) : table.type === 'survival' ? col.role : '';
-      const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column',
+      const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column (right-click for options)',
+        onfocus: (e) => { e.target.dataset.orig = col.name; },
         oninput: (e) => { col.name = e.target.value; tableChanged(table); },
+        onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== col.name) { propagateColumnRename(table, orig, col.name, ci); saveState(); } },
         ondblclick: (e) => e.target.select() });
+      nameInput.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const items = [{ label: '✎ Rename', onClick: () => { nameInput.focus(); nameInput.select(); } }];
+        if (table.columns.length > 1) items.push({ sep: true }, { label: '🗑 Delete column', danger: true, onClick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); tableChanged(table, true); } } });
+        showContextMenu(e.clientX, e.clientY, items);
+      });
       const colhead = el('div', { class: 'colhead' }, nameInput);
       if (roleLabel) colhead.append(el('div', { class: 'colrole' }, roleLabel));
       const th = el('th', {}, colhead);
@@ -272,10 +283,18 @@
     hr1.append(el('th', { class: 'rowhead', rowspan: 2 }, '#'));
     hr1.append(el('th', { rowspan: 2, class: 'rowtitle-head' }, el('div', { class: 'colrole', style: 'padding:6px 8px' }, 'Row factor')));
     table.groupNames.forEach((gn, gi) => {
-      const th = el('th', { colspan: n, style: 'text-align:center' },
-        el('input', { class: 'colname', value: gn, title: 'Click to rename this group',
-          oninput: (e) => { table.groupNames[gi] = e.target.value; tableChanged(table); },
-          ondblclick: (e) => e.target.select() }));
+      const gInput = el('input', { class: 'colname', value: gn, title: 'Click to rename this group (right-click for options)',
+        onfocus: (e) => { e.target.dataset.orig = table.groupNames[gi]; },
+        oninput: (e) => { table.groupNames[gi] = e.target.value; tableChanged(table); },
+        onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== table.groupNames[gi]) { propagateGroupedRename(table, orig, table.groupNames[gi]); saveState(); } },
+        ondblclick: (e) => e.target.select() });
+      gInput.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const items = [{ label: '✎ Rename', onClick: () => { gInput.focus(); gInput.select(); } }];
+        if (g > 2) items.push({ sep: true }, { label: '🗑 Delete group', danger: true, onClick: () => { if (confirm('Delete group "' + table.groupNames[gi] + '"?')) { table.removeGroup(gi); tableChanged(table, true); } } });
+        showContextMenu(e.clientX, e.clientY, items);
+      });
+      const th = el('th', { colspan: n, style: 'text-align:center' }, gInput);
       if (g > 2) {
         th.append(el('button', { class: 'coldel', title: 'Delete this group', tabindex: '-1',
           onclick: () => { if (confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); tableChanged(table, true); } } }, '×'));
@@ -1091,6 +1110,62 @@
       sw.p < 0.05 ? '⚠ Residuals deviate from normal (Shapiro-Wilk p < 0.05). Two-way ANOVA is fairly robust, but interpret with care.' : '✓ Residuals are consistent with normality (Shapiro-Wilk p ≥ 0.05).');
   }
 
+  // ---------- column / group renaming ----------
+  // Renaming happens inline via the header inputs (click, or right-click →
+  // Rename); on change we propagate the new name into any graphs already
+  // derived from this table so they reflect it too.
+  // Rewrite "A vs B"-style comparison labels when one side is renamed.
+  function renameInComparison(name, oldName, newName) {
+    if (typeof name !== 'string') return name;
+    return name.split(' vs ').map((p) => (p === oldName ? newName : p)).join(' vs ');
+  }
+  // Update every graph derived from this table so it reflects the new column name.
+  function propagateColumnRename(table, oldName, newName, ci) {
+    App.graphs.forEach((gr) => {
+      if (gr.tableId !== table.id) return;
+      const spec = gr.spec || {}; const o = spec.opts || {};
+      if (Array.isArray(spec.groups)) spec.groups.forEach((g) => { if (g.name === oldName) g.name = newName; });
+      if (o.labelA === oldName) o.labelA = newName;
+      if (o.labelB === oldName) o.labelB = newName;
+      if (spec.chartType === 'xy') {
+        if (ci === 0 && o.xLabel === oldName) o.xLabel = newName;
+        if (ci === 1 && o.yLabel === oldName) o.yLabel = newName;
+      }
+      if (Array.isArray(o.sig)) o.sig.forEach((s) => { if (s && s.name) s.name = renameInComparison(s.name, oldName, newName); });
+    });
+  }
+  // Grouped tables: the renamed group is a column factor level.
+  function propagateGroupedRename(table, oldName, newName) {
+    App.graphs.forEach((gr) => {
+      if (gr.tableId !== table.id) return;
+      const spec = gr.spec || {};
+      if (Array.isArray(spec.colNames)) spec.colNames = spec.colNames.map((n) => (n === oldName ? newName : n));
+      // Column-style analyses of grouped data name units "group · row".
+      if (Array.isArray(spec.groups)) spec.groups.forEach((g) => {
+        if (g.name === oldName) g.name = newName;
+        else if (typeof g.name === 'string' && g.name.startsWith(oldName + ' · ')) g.name = newName + g.name.slice(oldName.length);
+      });
+    });
+  }
+
+  // Lightweight popup menu used by header right-clicks. items:
+  // [{ label, onClick, danger }] with { sep: true } for separators.
+  function showContextMenu(x, y, items) {
+    const existing = document.getElementById('ctx-menu'); if (existing) existing.remove();
+    const menu = el('div', { id: 'ctx-menu', class: 'ctx-menu' });
+    items.forEach((it) => {
+      if (it.sep) { menu.append(el('div', { class: 'ctx-sep' })); return; }
+      menu.append(el('div', { class: 'ctx-item' + (it.danger ? ' danger' : ''), onclick: () => { menu.remove(); it.onClick(); } }, it.label));
+    });
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function h(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', h); }
+    }), 0);
+  }
+
   // ---------- graph spec builders ----------
   function graphSpec(chartType, groups, opts) {
     return { chartType, groups: groups.map((g) => ({ name: g.name, values: g.values.slice() })), opts: Object.assign({ errorType: 'sem' }, opts) };
@@ -1123,7 +1198,7 @@
       el('div', { class: 'view-actions' },
         result.graphId ? el('button', { class: 'btn', onclick: () => setActive('graph', result.graphId) }, '◧ View graph') : null,
         el('button', { class: 'btn', onclick: () => copyResultText(result) }, '⧉ Copy'),
-        el('button', { class: 'btn btn-ghost', onclick: () => { App.results = App.results.filter((r) => r !== result); App.active = null; renderNavigator(); renderContent(); saveState(); } }, '🗑 Delete')));
+        el('button', { class: 'btn btn-ghost', onclick: () => deleteResult(result.id) }, '🗑 Delete')));
     root.append(head);
     root.append(result.html);
   }
@@ -1148,7 +1223,7 @@
         srcTable ? el('button', { class: 'btn', onclick: () => setActive('data', srcTable.id) }, '▦ Data') : null,
         el('button', { class: 'btn', onclick: () => exportSVG(graph) }, '⭳ SVG'),
         el('button', { class: 'btn', onclick: () => exportPNG(graph) }, '⭳ PNG'),
-        el('button', { class: 'btn btn-ghost', onclick: () => { App.graphs = App.graphs.filter((g) => g !== graph); App.active = null; renderNavigator(); renderContent(); saveState(); } }, '🗑 Delete')));
+        el('button', { class: 'btn btn-ghost', onclick: () => deleteGraph(graph.id) }, '🗑 Delete')));
     root.append(head);
 
     const wrap = el('div', { class: 'graph-wrap' });
@@ -1805,6 +1880,87 @@
       fr.readAsText(f);
     });
     inp.click();
+  }
+
+  // ---------- deletion ----------
+  // How many results/graphs were derived from a given table (they store its id).
+  function relatedCounts(tableId) {
+    return {
+      results: App.results.filter((r) => r.tableId === tableId).length,
+      graphs: App.graphs.filter((g) => g.tableId === tableId).length,
+    };
+  }
+  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  // After removing whatever the user was viewing, fall back to another item so
+  // the content pane is never left pointing at something that no longer exists.
+  function afterDelete() {
+    if (!App.active || !activeObj()) {
+      App.active = App.tables[0] ? { view: 'data', id: App.tables[0].id }
+        : App.results[0] ? { view: 'result', id: App.results[0].id }
+          : App.graphs[0] ? { view: 'graph', id: App.graphs[0].id } : null;
+    }
+    renderNavigator(); renderContent(); saveState();
+  }
+  // Delete a data table together with every result and graph derived from it.
+  function deleteTable(id, opts) {
+    const t = tableById(id); if (!t) return;
+    const c = relatedCounts(id);
+    if (!(opts && opts.skipConfirm)) {
+      const extra = [];
+      if (c.results) extra.push(plural(c.results, 'result'));
+      if (c.graphs) extra.push(plural(c.graphs, 'graph'));
+      const tail = extra.length ? ' and its ' + extra.join(' and ') : '';
+      if (!confirm('Delete data table "' + t.name + '"' + tail + '? This cannot be undone.')) return;
+    }
+    App.tables = App.tables.filter((x) => x.id !== id);
+    App.results = App.results.filter((r) => r.tableId !== id);
+    App.graphs = App.graphs.filter((g) => g.tableId !== id);
+    afterDelete();
+    toast('Deleted "' + t.name + '"' + (c.results + c.graphs ? ' and related analyses/graphs' : ''));
+  }
+  function deleteResult(id) {
+    const r = App.results.find((x) => x.id === id); if (!r) return;
+    App.results = App.results.filter((x) => x.id !== id);
+    afterDelete(); toast('Deleted result');
+  }
+  function deleteGraph(id) {
+    const g = App.graphs.find((x) => x.id === id); if (!g) return;
+    App.graphs = App.graphs.filter((x) => x.id !== id);
+    // a result may link to this graph via graphId — drop the now-dangling link
+    App.results.forEach((r) => { if (r.graphId === id) delete r.graphId; });
+    afterDelete(); toast('Deleted graph');
+  }
+
+  // ---------- lightweight context menu (right-click on navigator items) ----------
+  function showContextMenu(x, y, items) {
+    const existing = $('#ctx-menu'); if (existing) existing.remove();
+    const menu = el('div', { id: 'ctx-menu', class: 'ctx-menu' });
+    items.forEach((it) => {
+      if (it.sep) { menu.append(el('div', { class: 'ctx-sep' })); return; }
+      menu.append(el('div', { class: 'ctx-item' + (it.danger ? ' danger' : ''), onclick: () => { menu.remove(); it.onClick(); } }, it.label));
+    });
+    document.body.append(menu);
+    // keep the menu inside the viewport
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    menu.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    setTimeout(() => document.addEventListener('mousedown', function h(ev) {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', h); }
+    }), 0);
+  }
+  function navContextMenu(e, item, view) {
+    e.preventDefault();
+    const items = [{ label: 'Open', onClick: () => setActive(view, item.id) }, { sep: true }];
+    if (view === 'data') {
+      const c = relatedCounts(item.id);
+      const tail = (c.results + c.graphs) ? ' & related' : '';
+      items.push({ label: '🗑 Delete table' + tail, danger: true, onClick: () => deleteTable(item.id) });
+    } else if (view === 'result') {
+      items.push({ label: '🗑 Delete result', danger: true, onClick: () => deleteResult(item.id) });
+    } else {
+      items.push({ label: '🗑 Delete graph', danger: true, onClick: () => deleteGraph(item.id) });
+    }
+    showContextMenu(e.clientX, e.clientY, items);
   }
 
   // ---------- top-level actions ----------
