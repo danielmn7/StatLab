@@ -60,14 +60,67 @@
   function tableById(id) { return App.tables.find((t) => t.id === id); }
   function setActive(view, id) { App.active = { view, id }; renderNavigator(); renderContent(); }
 
+  // Data edits must invalidate every graph/result derived from the edited table.
+  // Visual controls are intentionally preserved while data-derived fields (means,
+  // curves, regression and significance values) are rebuilt from the source table.
+  const LINKED_VISUAL_OPTIONS = ['title', 'xLabel', 'yLabel', 'percent', 'atRisk', 'showCI', 'showPoints', 'errorType', 'colors', 'paletteId', 'barBorder', 'barWidth', 'markers', 'marker', 'pointColor', 'pointMarkers', 'fontStyle', 'sigStyle', 'legendPosition', 'yAxis', 'xAxis'];
+  function compatibleChartType(current, fresh) {
+    const families = {
+      grouped: ['grouped', 'grouped-line'],
+      bar: ['bar', 'dot', 'box'],
+      paired: ['paired', 'bar', 'dot', 'box'],
+    };
+    const family = families[fresh];
+    return family && family.includes(current) ? current : fresh;
+  }
+  function mergeLinkedGraphSpec(graph, fresh) {
+    const old = graph.spec || {}, oldOpts = old.opts || {}, nextOpts = Object.assign({}, fresh.opts || {});
+    LINKED_VISUAL_OPTIONS.forEach((key) => { if (oldOpts[key] !== undefined) nextOpts[key] = oldOpts[key]; });
+    graph.spec = Object.assign({}, fresh, { chartType: compatibleChartType(old.chartType, fresh.chartType), opts: nextOpts });
+  }
+  function refreshLinkedGraphs(table) {
+    const tableResults = App.results.filter((r) => r.tableId === table.id);
+    const resultGraphIds = new Set();
+    tableResults.forEach((result) => {
+      let computed;
+      try { computed = compute(table, result.spec); }
+      catch (err) {
+        result.html = el('div', { class: 'note' }, 'Could not recompute this result after the data changed: ' + err.message);
+        return;
+      }
+      result.html = computed.html;
+      if (result.graphId && computed.graphSpec) {
+        const graph = App.graphs.find((g) => g.id === result.graphId);
+        if (graph) { mergeLinkedGraphSpec(graph, computed.graphSpec); resultGraphIds.add(graph.id); }
+      }
+    });
+    App.graphs.filter((g) => g.tableId === table.id && !resultGraphIds.has(g.id) && !tableResults.some((r) => r.graphId === g.id)).forEach((graph) => {
+      try { mergeLinkedGraphSpec(graph, makeQuickGraphSpec(table)); }
+      catch (err) { /* keep the last valid graph while the source is temporarily invalid */ }
+    });
+  }
+  function tableChanged(table, rerender = false) {
+    refreshLinkedGraphs(table);
+    renderNavigator();
+    saveState();
+    const active = App.active;
+    const activeSource = active && ((active.view === 'graph' && App.graphs.some((g) => g.id === active.id && g.tableId === table.id)) || (active.view === 'result' && App.results.some((r) => r.id === active.id && r.tableId === table.id)));
+    if (rerender || activeSource) renderContent();
+  }
+
   // ---------- navigator ----------
   function renderNavigator() {
-    const mk = (item, view, icon) => el('li', {
-      class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
-      title: 'Right-click for options',
-      onclick: () => setActive(view, item.id),
-      oncontextmenu: (e) => navContextMenu(e, item, view),
-    }, el('span', { class: 'ico' }, icon), item.name);
+    const mk = (item, view, icon) => {
+      const isTable = view === 'data';
+      const hasGraph = isTable && App.graphs.some((g) => g.tableId === item.id);
+      return el('li', {
+        class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
+        title: 'Right-click for options',
+        onclick: () => setActive(view, item.id),
+        oncontextmenu: (e) => navContextMenu(e, item, view),
+      }, el('span', { class: 'ico' }, icon), item.name,
+        hasGraph ? el('span', { class: 'graph-status', title: 'This table has a graph' }, '✓') : null);
+    };
     const tl = $('#nav-tables'); tl.innerHTML = '';
     if (!App.tables.length) tl.append(el('li', { class: 'nav-empty' }, 'No tables yet'));
     App.tables.forEach((t) => tl.append(mk(t, 'data', t.type === 'survival' ? '⏱️' : t.type === 'xy' ? '📈' : '▦')));
@@ -103,7 +156,7 @@
     if (!table) return;
     const head = el('div', { class: 'view-head' });
     const titleInput = el('input', {
-      value: table.name, oninput: (e) => { table.name = e.target.value; renderNavigator(); saveState(); },
+      value: table.name, oninput: (e) => { table.name = e.target.value; tableChanged(table); },
     });
     head.append(el('h1', { class: 'view-title' }, titleInput));
     const typeLabels = { column: 'Column data', xy: 'XY data', survival: 'Survival data', grouped: 'Grouped data' };
@@ -132,17 +185,17 @@
     sheetCol.append(buildSheet(table));
 
     const tools = el('div', { class: 'grid-tools' },
-      el('button', { class: 'btn btn-sm', onclick: () => { table.addRow(); renderContent(); saveState(); } }, '＋ Row'),
+      el('button', { class: 'btn btn-sm', onclick: () => { table.addRow(); tableChanged(table, true); } }, '＋ Row'),
       table.type === 'grouped'
-        ? el('button', { class: 'btn btn-sm', onclick: () => { table.addGroup(); renderContent(); saveState(); } }, '＋ Group')
-        : el('button', { class: 'btn btn-sm', onclick: () => { table.addColumn(); renderContent(); saveState(); } }, '＋ Column'),
+        ? el('button', { class: 'btn btn-sm', onclick: () => { table.addGroup(); tableChanged(table, true); } }, '＋ Group')
+        : el('button', { class: 'btn btn-sm', onclick: () => { table.addColumn(); tableChanged(table, true); } }, '＋ Column'),
       table.type === 'grouped'
-        ? el('button', { class: 'btn btn-sm', onclick: () => { table.addReplicate(); renderContent(); saveState(); } }, '＋ Replicate')
+        ? el('button', { class: 'btn btn-sm', onclick: () => { table.addReplicate(); tableChanged(table, true); } }, '＋ Replicate')
         : null,
       table.type !== 'survival'
-        ? el('button', { class: 'btn btn-sm', title: 'Swap rows and columns', onclick: () => { table.transpose(); renderContent(); saveState(); toast('Transposed rows ↔ columns'); } }, '⇄ Transpose')
+        ? el('button', { class: 'btn btn-sm', title: 'Swap rows and columns', onclick: () => { table.transpose(); tableChanged(table, true); toast('Transposed rows ↔ columns'); } }, '⇄ Transpose')
         : null,
-      el('button', { class: 'btn btn-sm btn-ghost', onclick: () => { table.rows.forEach((r) => r.fill('')); renderContent(); saveState(); toast('Cleared'); } }, 'Clear data'));
+      el('button', { class: 'btn btn-sm btn-ghost', onclick: () => { table.rows.forEach((r) => r.fill('')); tableChanged(table, true); toast('Cleared'); } }, 'Clear data'));
     sheetCol.append(tools);
     if (table.type !== 'survival') sheetCol.append(el('div', { class: 'note', style: 'margin-top:6px;font-size:11.5px' }, 'Tip: paste with Ctrl+V, or Ctrl+Shift+V to paste transposed. Use ⇄ Transpose to flip existing data.'));
 
@@ -188,7 +241,7 @@
       if (type === 'survival' && table.columns.length < 3) table.setColumns(['Time', 'Status', 'Group']);
       table.columns.forEach((c, i) => { c.role = D.roleFor(type, i); });
     }
-    renderContent(); renderNavigator(); saveState();
+    renderContent(); tableChanged(table);
   }
 
   // ---------- spreadsheet grid (selection, drag, copy/paste, edit-in-place) ----------
@@ -203,13 +256,13 @@
       const roleLabel = table.type === 'xy' ? (col.role === 'x' ? 'X' : 'Y' + ci) : table.type === 'survival' ? col.role : '';
       const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column (right-click for options)',
         onfocus: (e) => { e.target.dataset.orig = col.name; },
-        oninput: (e) => { col.name = e.target.value; saveState(); },
+        oninput: (e) => { col.name = e.target.value; tableChanged(table); },
         onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== col.name) { propagateColumnRename(table, orig, col.name, ci); saveState(); } },
         ondblclick: (e) => e.target.select() });
       nameInput.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
         const items = [{ label: '✎ Rename', onClick: () => { nameInput.focus(); nameInput.select(); } }];
-        if (table.columns.length > 1) items.push({ sep: true }, { label: '🗑 Delete column', danger: true, onClick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); renderContent(); saveState(); } } });
+        if (table.columns.length > 1) items.push({ sep: true }, { label: '🗑 Delete column', danger: true, onClick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); tableChanged(table, true); } } });
         showContextMenu(e.clientX, e.clientY, items);
       });
       const colhead = el('div', { class: 'colhead' }, nameInput);
@@ -217,7 +270,7 @@
       const th = el('th', {}, colhead);
       if (table.columns.length > 1) {
         th.append(el('button', { class: 'coldel', title: 'Delete this column', tabindex: '-1',
-          onclick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); renderContent(); saveState(); } } }, '×'));
+          onclick: () => { if (confirm('Delete column "' + col.name + '"?')) { table.removeColumn(ci); tableChanged(table, true); } } }, '×'));
       }
       hr.append(th);
     });
@@ -232,19 +285,19 @@
     table.groupNames.forEach((gn, gi) => {
       const gInput = el('input', { class: 'colname', value: gn, title: 'Click to rename this group (right-click for options)',
         onfocus: (e) => { e.target.dataset.orig = table.groupNames[gi]; },
-        oninput: (e) => { table.groupNames[gi] = e.target.value; saveState(); },
+        oninput: (e) => { table.groupNames[gi] = e.target.value; tableChanged(table); },
         onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== table.groupNames[gi]) { propagateGroupedRename(table, orig, table.groupNames[gi]); saveState(); } },
         ondblclick: (e) => e.target.select() });
       gInput.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
         const items = [{ label: '✎ Rename', onClick: () => { gInput.focus(); gInput.select(); } }];
-        if (g > 2) items.push({ sep: true }, { label: '🗑 Delete group', danger: true, onClick: () => { if (confirm('Delete group "' + table.groupNames[gi] + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } } });
+        if (g > 2) items.push({ sep: true }, { label: '🗑 Delete group', danger: true, onClick: () => { if (confirm('Delete group "' + table.groupNames[gi] + '"?')) { table.removeGroup(gi); tableChanged(table, true); } } });
         showContextMenu(e.clientX, e.clientY, items);
       });
       const th = el('th', { colspan: n, style: 'text-align:center' }, gInput);
       if (g > 2) {
         th.append(el('button', { class: 'coldel', title: 'Delete this group', tabindex: '-1',
-          onclick: () => { if (confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); renderContent(); saveState(); } } }, '×'));
+          onclick: () => { if (confirm('Delete group "' + gn + '"?')) { table.removeGroup(gi); tableChanged(table, true); } } }, '×'));
       }
       hr1.append(th);
     });
@@ -267,7 +320,7 @@
       tr.append(el('td', { class: 'rowhead' }, String(ri + 1)));
       if (grouped) {
         tr.append(el('td', { class: 'cat rowtitle' },
-          el('input', { class: 'titleinput', value: table.rowTitles[ri] || '', placeholder: 'Row ' + (ri + 1), oninput: (e) => { table.rowTitles[ri] = e.target.value; saveState(); } })));
+          el('input', { class: 'titleinput', value: table.rowTitles[ri] || '', placeholder: 'Row ' + (ri + 1), oninput: (e) => { table.rowTitles[ri] = e.target.value; tableChanged(table); } })));
       }
       for (let c = 0; c < dataCols; c++) {
         const td = el('td', { class: 'dcell', 'data-r': ri, 'data-c': c });
@@ -339,7 +392,7 @@
       else if (k === 'Tab') { e.preventDefault(); this.move(0, e.shiftKey ? -1 : 1); }
       else if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); this.clearSel(); }
       else if (k === 'F2') { e.preventDefault(); this.enterEdit(null); }
-      else if (k.length === 1 && !e.altKey) { this.enterEdit(k); }
+      else if (k.length === 1 && !e.altKey) { e.preventDefault(); this.enterEdit(k); }
     }
     move(dr, dc) {
       let r = this.active.r + dr, c = clamp(this.active.c + dc, 0, this.cols - 1);
@@ -356,7 +409,7 @@
     clearSel() {
       const s = this.sel; if (!s) return;
       for (let r = s.r1; r <= s.r2; r++) for (let c = s.c1; c <= s.c2; c++) { this.table.setCell(r, c, ''); const td = this.cellTd(r, c); if (td) td.querySelector('.cellval').textContent = ''; }
-      saveState();
+      tableChanged(this.table);
     }
     enterEdit(initial) {
       const { r, c } = this.active; const td = this.cellTd(r, c); if (!td) return;
@@ -368,6 +421,10 @@
         ev.stopPropagation();
         if (ev.key === 'Enter') { ev.preventDefault(); this.commitEdit(); this.move(1, 0); }
         else if (ev.key === 'Tab') { ev.preventDefault(); this.commitEdit(); this.move(0, ev.shiftKey ? -1 : 1); }
+        else if (ev.key === 'ArrowUp') { ev.preventDefault(); this.commitEdit(); this.move(-1, 0); }
+        else if (ev.key === 'ArrowDown') { ev.preventDefault(); this.commitEdit(); this.move(1, 0); }
+        else if (ev.key === 'ArrowLeft') { ev.preventDefault(); this.commitEdit(); this.move(0, -1); }
+        else if (ev.key === 'ArrowRight') { ev.preventDefault(); this.commitEdit(); this.move(0, 1); }
         else if (ev.key === 'Escape') { ev.preventDefault(); this.cancelEdit(); }
       });
       inp.addEventListener('blur', () => { if (this.editing) this.commitEdit(); });
@@ -377,7 +434,7 @@
       const inp = td && td.querySelector('input.celledit'); const val = inp ? inp.value : '';
       this.editing = false; this.table.setCell(r, c, val);
       if (td) { td.innerHTML = ''; td.append(el('div', { class: 'cellval' }, val)); }
-      saveState(); this.highlight(); this.wrap.focus();
+      tableChanged(this.table); this.highlight(); this.wrap.focus();
     }
     cancelEdit() {
       const { r, c } = this.active; const td = this.cellTd(r, c); this.editing = false;
@@ -399,7 +456,7 @@
       const start = this.active || { r: 0, c: 0 };
       const parsed = D.parseDelimited(text);
       parsed.rows.forEach((rrow, i) => rrow.forEach((v, j) => this.table.setCell(start.r + i, start.c + j, v)));
-      saveState();
+      tableChanged(this.table);
       const nr = parsed.rows.length, nc = parsed.rows[0] ? parsed.rows[0].length : 0;
       pendingSel = { tableId: this.table.id, sel: { r1: start.r, c1: start.c, r2: start.r + nr - 1, c2: start.c + nc - 1 }, active: { r: start.r, c: start.c } };
       renderContent();
@@ -413,7 +470,7 @@
         const R = grid.length, Cc = Math.max(...grid.map((r) => r.length), 1);
         const start = this.active || { r: 0, c: 0 };
         for (let i = 0; i < Cc; i++) for (let j = 0; j < R; j++) this.table.setCell(start.r + i, start.c + j, grid[j][i] != null ? grid[j][i] : '');
-        saveState();
+        tableChanged(this.table);
         pendingSel = { tableId: this.table.id, sel: { r1: start.r, c1: start.c, r2: start.r + Cc - 1, c2: start.c + R - 1 }, active: { r: start.r, c: start.c } };
         renderContent();
         toast(`Pasted transposed (${Cc} × ${R})`);
@@ -422,7 +479,7 @@
         navigator.clipboard.readText().then(doFill).catch(() => toast('Clipboard blocked — use Ctrl+V, then ⇄ Transpose'));
       } else toast('Use Ctrl+V, then click ⇄ Transpose');
     }
-    rerenderKeep(cell) { pendingSel = { tableId: this.table.id, sel: { r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, active: cell }; saveState(); renderContent(); }
+    rerenderKeep(cell) { pendingSel = { tableId: this.table.id, sel: { r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, active: cell }; tableChanged(this.table, true); }
     restore(p) {
       const maxR = this.nrows - 1, maxC = this.cols - 1;
       this.active = { r: clamp(p.active.r, 0, maxR), c: clamp(p.active.c, 0, maxC) }; this.anchor = this.active;
@@ -627,7 +684,7 @@
     const result = { id: 'res_' + App.counter, name: res.title, tableId: table.id, html: res.html, kind: spec.kind, spec };
     App.results.push(result);
     if (res.graphSpec) {
-      const graph = { id: 'gr_' + App.counter, name: res.graphSpec.opts.title || res.title, tableId: table.id, spec: res.graphSpec };
+      const graph = { id: 'gr_' + App.counter, name: res.graphSpec.opts.title || res.title, tableId: table.id, resultId: result.id, spec: res.graphSpec };
       App.graphs.push(graph);
       result.graphId = graph.id;
     }
@@ -852,7 +909,7 @@
           const r = N.grubbsIterative(g.values);
           return el('div', { style: 'margin-bottom:14px' }, head,
             r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`)) : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
-            r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', {}, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
+            r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', { class: 'num' }, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
             el('div', { class: 'note' }, `${r.cleanedN} of ${g.values.length} values remain after removing outliers.`));
         }
         const r = N.grubbs(g.values);
@@ -1129,6 +1186,7 @@
     if (spec.chartType === 'xy') return Charts.xyPlot(spec.xs, spec.ys, Object.assign({ regression: spec.regression }, o));
     if (spec.chartType === 'survival') return Charts.survivalPlot(spec.curves, o);
     if (spec.chartType === 'grouped') return Charts.groupedBar(spec.cells, spec.rowNames, spec.colNames, o);
+    if (spec.chartType === 'grouped-line') return Charts.groupedLine(spec.cells, spec.rowNames, spec.colNames, o);
     return '<svg viewBox="0 0 100 40"><text x="10" y="24">No chart</text></svg>';
   }
 
@@ -1155,7 +1213,7 @@
     if (!graph) return;
     const o = graph.spec.opts;
     const ct = graph.spec.chartType;
-    if (['bar', 'dot', 'box', 'xy', 'grouped'].includes(ct)) o.yAxis = o.yAxis || { auto: true, min: '', max: '', log: false, sci: false, step: '' };
+    if (['bar', 'dot', 'box', 'xy', 'grouped', 'grouped-line'].includes(ct)) o.yAxis = o.yAxis || { auto: true, min: '', max: '', log: false, sci: false, step: '' };
     if (['xy', 'survival'].includes(ct)) o.xAxis = o.xAxis || { auto: true, min: '', max: '', log: false, sci: false, step: '' };
     const srcTable = tableById(graph.tableId);
     const head = el('div', { class: 'view-head' },
@@ -1212,14 +1270,18 @@
     // chart type (depends on data)
     const types = graph.spec.chartType === 'survival' ? [['survival', 'Survival curve']]
       : graph.spec.chartType === 'xy' ? [['xy', 'Scatter + regression']]
-        : graph.spec.chartType === 'grouped' ? [['grouped', 'Grouped bar']]
+        : ['grouped', 'grouped-line'].includes(graph.spec.chartType) ? [['grouped', 'Grouped bar'], ['grouped-line', 'Line / XY']]
           : graph.spec.chartType === 'paired' ? [['paired', 'Before–after'], ['bar', 'Bar (group means)'], ['dot', 'Column scatter'], ['box', 'Box & whisker']]
             : [['bar', 'Bar + error'], ['dot', 'Column scatter'], ['box', 'Box & whisker']];
     controls.append(ctrlGroup('Chart type', el('select', { onchange: (e) => { graph.spec.chartType = e.target.value; refresh(); } }, ...types.map(([v, t]) => el('option', { value: v, selected: graph.spec.chartType === v }, t)))));
 
-    if (['bar', 'dot', 'grouped'].includes(graph.spec.chartType)) {
+    if (['bar', 'dot', 'grouped', 'grouped-line'].includes(graph.spec.chartType)) {
       controls.append(ctrlGroup('Error bars', el('select', { onchange: (e) => { o.errorType = e.target.value; rerender(); } },
         ...[['sem', 'Mean ± SEM'], ['sd', 'Mean ± SD'], ['ci95', 'Mean ± 95% CI'], ['none', 'Mean only']].map(([v, t]) => el('option', { value: v, selected: o.errorType === v }, t)))));
+    }
+    if (['grouped', 'grouped-line'].includes(graph.spec.chartType)) {
+      controls.append(ctrlGroup('Legend position', el('select', { onchange: (e) => { o.legendPosition = e.target.value; rerender(); } },
+        ...[['right', 'Right of plot'], ['left', 'Left of plot'], ['top', 'Above plot'], ['bottom', 'Below plot']].map(([v, t]) => el('option', { value: v, selected: (o.legendPosition || 'right') === v }, t)))));
     }
     if (graph.spec.chartType === 'bar') {
       controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints, (v) => { o.showPoints = v; refresh(); })));
@@ -1266,7 +1328,7 @@
     // ---- color palette + per-series color overrides ----
     // only chart types whose builders honor opts.colors (paired/xy use fixed colors)
     const colorItems = ['bar', 'dot', 'box'].includes(ct) ? (graph.spec.groups || []).map((g) => g.name)
-      : ct === 'grouped' ? graph.spec.colNames
+      : ['grouped', 'grouped-line'].includes(ct) ? graph.spec.colNames
         : (ct === 'survival' && graph.spec.curves) ? graph.spec.curves.map((c) => c.name)
           : null;
     if (colorItems && colorItems.length) {
@@ -1341,7 +1403,7 @@
     // reorder categories (drag chips; also draggable directly on bar/dot/box charts)
     if (['bar', 'dot', 'box'].includes(ct) && graph.spec.groups && graph.spec.groups.length > 1)
       controls.append(ctrlGroup('Category order — drag', reorderChips(graph.spec.groups.map((g) => g.name), reorderGroups)));
-    if (ct === 'grouped') {
+    if (['grouped', 'grouped-line'].includes(ct)) {
       if (graph.spec.rowNames && graph.spec.rowNames.length > 1) controls.append(ctrlGroup('Row order — drag', reorderChips(graph.spec.rowNames, reorderRows)));
       if (graph.spec.colNames && graph.spec.colNames.length > 1) controls.append(ctrlGroup('Series order — drag', reorderChips(graph.spec.colNames, reorderSeries)));
     }
@@ -1552,15 +1614,38 @@
   function exportSVG(graph) { download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
   function exportPNG(graph) { Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }
 
-  function quickGraph(table) {
-    if (!table.hasData()) { toast('Enter or paste some data first'); return; }
-    let spec;
-    if (table.type === 'survival') { const res = S.analyze(table.survivalRows()); spec = { chartType: 'survival', curves: res.groups.map((nm) => ({ name: nm, steps: res.km[nm].steps, censorTimes: res.km[nm].censorTimes, n0: res.km[nm].n })), opts: { title: table.name, xLabel: 'Time', yLabel: 'Percent survival', percent: true, atRisk: true } }; }
-    else if (table.type === 'xy') { const r = T.linearRegression(table.rawColumn(0), table.rawColumn(1)); spec = xySpec(table, r, `Y = ${num(r.slope, 3)}X ${r.intercept >= 0 ? '+' : '−'} ${num(Math.abs(r.intercept), 3)}`); }
-    else if (table.type === 'grouped') { const cm = table.cellsMatrix(); spec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem' } }; }
-    else { spec = graphSpec('bar', table.groups(), { title: table.name, yLabel: 'Value', errorType: 'sem' }); }
-    const graph = { id: 'gr_' + App.counter++, name: table.name, tableId: table.id, spec };
-    App.graphs.push(graph); renderNavigator(); setActive('graph', graph.id); saveState();
+  function makeQuickGraphSpec(table) {
+    if (table.type === 'survival') {
+      const res = S.analyze(table.survivalRows());
+      return { chartType: 'survival', curves: res.groups.map((nm) => ({ name: nm, steps: res.km[nm].steps, censorTimes: res.km[nm].censorTimes, n0: res.km[nm].n })), opts: { title: table.name, xLabel: 'Time', yLabel: 'Percent survival', percent: true, atRisk: true } };
+    }
+    if (table.type === 'xy') {
+      const r = T.linearRegression(table.rawColumn(0), table.rawColumn(1));
+      return xySpec(table, r, `Y = ${num(r.slope, 3)}X ${r.intercept >= 0 ? '+' : '−'} ${num(Math.abs(r.intercept), 3)}`);
+    }
+    if (table.type === 'grouped') {
+      const cm = table.cellsMatrix();
+      return { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem' } };
+    }
+    return graphSpec('bar', table.groups(), { title: table.name, yLabel: 'Value', errorType: 'sem' });
+  }
+  function quickGraph(table, options = {}) {
+    if (!table.hasData()) { toast('Enter or paste some data first'); return null; }
+    let graph = App.graphs.find((g) => g.tableId === table.id && !App.results.some((r) => r.graphId === g.id));
+    if (graph) mergeLinkedGraphSpec(graph, makeQuickGraphSpec(table));
+    else {
+      graph = { id: 'gr_' + App.counter++, name: table.name, tableId: table.id, spec: makeQuickGraphSpec(table) };
+      App.graphs.push(graph);
+    }
+    if (options.activate !== false) { renderNavigator(); setActive('graph', graph.id); saveState(); }
+    return graph;
+  }
+  function graphAll() {
+    const graphs = App.tables.filter((table) => table.hasData()).map((table) => quickGraph(table, { activate: false })).filter(Boolean);
+    renderNavigator();
+    if (graphs.length) setActive('graph', graphs[0].id);
+    saveState();
+    toast(graphs.length ? 'Graph ready for ' + graphs.length + ' data table' + (graphs.length === 1 ? '' : 's') : 'Enter data into a table first');
   }
 
   // ---------- import ----------
@@ -1677,14 +1762,14 @@
       v: 1, counter: App.counter,
       tables: App.tables.map((t) => ({ id: t.id, type: t.type, name: t.name, notes: t.notes, columns: t.columns, rows: t.rows, groupNames: t.groupNames, nsub: t.nsub, rowTitles: t.rowTitles })),
       results: App.results.map((r) => ({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, graphId: r.graphId })),
-      graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, spec: g.spec })),
+      graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec })),
       active: App.active,
     };
   }
   function restoreSnapshot(s) {
     App.counter = s.counter || 1;
     App.tables = (s.tables || []).map(D.fromJSON);
-    App.graphs = (s.graphs || []).map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, spec: g.spec }));
+    App.graphs = (s.graphs || []).map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec }));
     App.results = [];
     (s.results || []).forEach((r) => {
       const table = tableById(r.tableId);
@@ -1895,6 +1980,7 @@
     $('#btn-saveas').addEventListener('click', saveProjectAs);
     $('#btn-open').addEventListener('click', openProjectFile);
     $('#btn-guide').addEventListener('click', openGuide);
+    $('#btn-graph-all').addEventListener('click', graphAll);
     $('#analyze-go').addEventListener('click', runAnalyzeFromModal);
     $('#import-go').addEventListener('click', doImport);
     $('#guide-back').addEventListener('click', () => { guideStack.pop(); renderGuide(); });

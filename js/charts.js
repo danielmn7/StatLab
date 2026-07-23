@@ -418,6 +418,27 @@ const Charts = (function () {
     return `<text x="${f.x1}" y="${f.H - 8}" text-anchor="end" font-size="10.5" fill="#8696a7">${label}</text>`;
   }
 
+  function legendPosition(pos) { return ['right', 'left', 'top', 'bottom'].includes(pos) ? pos : 'right'; }
+
+  // Keep the series key outside the plotting area by default so significance
+  // brackets never compete with it. The graph controls can move it explicitly.
+  function chartLegend(f, names, colors, opts) {
+    const pos = legendPosition(opts && opts.legendPosition);
+    const gap = 17;
+    let x, y;
+    if (pos === 'right') { x = f.x1 + 18; y = f.y0 + 12; }
+    else if (pos === 'left') { x = 22; y = f.y0 + 12; }
+    else if (pos === 'top') { x = f.x0; y = f.y0 - 12 - (names.length - 1) * gap; }
+    else { x = f.x1 - 118; y = f.y1 + 42; }
+    let s = `<g class="chart-legend" data-position="${pos}">`;
+    names.forEach((name, i) => {
+      const yy = y + i * gap, col = colors[i % colors.length];
+      s += `<rect x="${x}" y="${yy - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1).attr}/>`;
+      s += `<text x="${x + 18}" y="${yy + 2}" font-size="11.5" fill="#1c2733">${esc(name)}</text>`;
+    });
+    return s + '</g>';
+  }
+
   // ---- 2. column dot plot (individual points + mean/error line) ----
   function dotPlot(groups, opts = {}) {
     const f = frame(opts);
@@ -662,8 +683,15 @@ const Charts = (function () {
     const gst = sigStyleOf(opts);
     const sigRow = gst.fontSize + 9;
     const nSig = (opts.sig || []).filter((g) => g.on !== false).length;
-    const sigHead = nSig > 1 ? Math.min(nSig - 1, 6) * sigRow : 0;
-    const f = frame(Object.assign({ margin: { top: 46 + sigHead, right: 24, bottom: 64, left: 70 } }, opts));
+    const sigHead = nSig > 1 ? (nSig - 1) * sigRow : 0;
+    const lp = legendPosition(opts.legendPosition);
+    const defaultMargin = {
+      top: 46 + sigHead + (lp === 'top' ? colNames.length * 17 + 8 : 0),
+      right: lp === 'right' ? 150 : 24,
+      bottom: 64 + (lp === 'bottom' ? colNames.length * 17 + 18 : 0),
+      left: lp === 'left' ? 150 : 70,
+    };
+    const f = frame(Object.assign({}, opts, { margin: Object.assign(defaultMargin, opts.margin || {}) }));
     const colors = opts.colors || PALETTE;
     const errType = opts.errorType || 'sem';
     const a = rowNames.length, b = colNames.length;
@@ -728,13 +756,73 @@ const Charts = (function () {
       let y = bk.base;
       placed.forEach((p) => { if (bk.xR >= p.xL - 0.5 && bk.xL <= p.xR + 0.5) y = Math.min(y, p.y - sigRow); });
       placed.push({ xL: bk.xL, xR: bk.xR, y });
-      if (gst.showLine) s += `<path d="M${bk.xL} ${y} L${bk.xL} ${y - 5} L${bk.xR} ${y - 5} L${bk.xR} ${y}" fill="none" stroke="${gst.color}" stroke-width="${gst.lineWidth}"/>`;
-      s += `<text x="${(bk.xL + bk.xR) / 2}" y="${y - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(bk.g, gst.notation))}</text>`;
+      if (gst.showLine) s += `<path class="sig-annotation" d="M${bk.xL} ${y} L${bk.xL} ${y - 5} L${bk.xR} ${y - 5} L${bk.xR} ${y}" fill="none" stroke="${gst.color}" stroke-width="${gst.lineWidth}"/>`;
+      s += `<text class="sig-annotation" x="${(bk.xL + bk.xR) / 2}" y="${y - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(bk.g, gst.notation))}</text>`;
     });
     // legend
-    colNames.forEach((cn, j) => { const col = colors[j % colors.length]; const lx = f.x1 - 118, ly = f.y0 + 12 + j * 17; s += `<rect x="${lx}" y="${ly - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1).attr}/>`; s += `<text x="${lx + 18}" y="${ly + 2}" font-size="11.5" fill="#1c2733">${esc(cn)}</text>`; });
+    s += chartLegend(f, colNames, colors, opts);
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
+    s += '</svg>';
+    return s;
+  }
+
+  // ---- 8. grouped line / XY-style plot: rows = x positions, columns = series ----
+  function groupedLine(cells, rowNames, colNames, opts = {}) {
+    const lp = legendPosition(opts.legendPosition);
+    const defaultMargin = {
+      top: 46 + (lp === 'top' ? colNames.length * 17 + 8 : 0),
+      right: lp === 'right' ? 150 : 24,
+      bottom: 64 + (lp === 'bottom' ? colNames.length * 17 + 18 : 0),
+      left: lp === 'left' ? 150 : 70,
+    };
+    const f = frame(Object.assign({}, opts, { margin: Object.assign(defaultMargin, opts.margin || {}) }));
+    const colors = opts.colors || PALETTE;
+    const errType = opts.errorType || 'sem';
+    const stat = (values) => {
+      const vals = (values || []).filter((v) => v !== '' && v != null && isFinite(+v)).map(Number);
+      if (!vals.length) return null;
+      const m = mean(vals), sdv = vals.length > 1 ? sd(vals) : 0, se = vals.length > 1 ? sdv / Math.sqrt(vals.length) : 0;
+      const err = errType === 'sd' ? sdv : errType === 'ci95' ? (vals.length > 1 ? tcrit95(vals.length - 1) * se : 0) : errType === 'none' ? 0 : se;
+      return { m, err };
+    };
+    const series = colNames.map((name, j) => ({ name, points: rowNames.map((_, i) => stat(cells[i] && cells[i][j])) }));
+    const all = series.flatMap((ser) => ser.points.filter(Boolean).flatMap((p) => [p.m - p.err, p.m + p.err]));
+    const lo = all.length ? Math.min(...all) : 0, hi = all.length ? Math.max(...all) : 1;
+    const sc = makeYScale(f, lo, hi, 6, opts.yAxis || {});
+    const uid = ++_uid;
+    const ts = textStyleOf(opts);
+    let s = open(f, opts.title, ts);
+    s += yAxis(f, sc, opts.yLabel || 'Value', ts);
+    s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
+    const xAt = (i) => rowNames.length <= 1 ? (f.x0 + f.x1) / 2 : f.x0 + i * f.pw / (rowNames.length - 1);
+    rowNames.forEach((name, i) => {
+      const x = xAt(i);
+      s += `<line x1="${x}" y1="${f.y1}" x2="${x}" y2="${f.y1 + 5}" stroke="#1c2733" stroke-width="1.1"/>`;
+      s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(name)}</text>`;
+    });
+    let marks = '';
+    series.forEach((ser, j) => {
+      const col = colors[j % colors.length], shape = (opts.markers && opts.markers[j]) || 'circle';
+      let path = '', previous = null;
+      ser.points.forEach((p, i) => {
+        if (!p) { previous = null; return; }
+        const x = xAt(i), y = sc.toY(p.m);
+        path += `${previous ? ' L' : 'M'}${x} ${y}`;
+        previous = { x, y };
+        if (p.err > 0) {
+          const yhi = sc.toY(p.m + p.err), ylo = sc.toY(p.m - p.err);
+          marks += `<line x1="${x}" y1="${yhi}" x2="${x}" y2="${ylo}" stroke="${col}" stroke-width="1.2"/>`;
+          marks += `<line x1="${x - 5}" y1="${yhi}" x2="${x + 5}" y2="${yhi}" stroke="${col}" stroke-width="1.2"/>`;
+          marks += `<line x1="${x - 5}" y1="${ylo}" x2="${x + 5}" y2="${ylo}" stroke="${col}" stroke-width="1.2"/>`;
+        }
+        if (opts.showPoints !== false) marks += markerSVG(x, y, 3.8, ptShape(opts, j, i, shape), { fill: col, stroke: col, fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(j, i, x, y) });
+      });
+      marks += `<path class="grouped-line-series" data-series="${escAttr(ser.name)}" d="${path}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    });
+    s += clipWrap(f, uid, marks);
+    s += chartLegend(f, colNames, colors, opts);
+    s += errLegend(f, errType);
     s += '</svg>';
     return s;
   }
@@ -759,7 +847,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
+  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;
