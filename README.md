@@ -75,6 +75,12 @@ Import Data, Export Figure) with real file dialogs, plus Edit/View/Analyze menus
 
 Then **Load an example**, **Import data**, or **＋ New table** and start typing.
 
+Right-click a table, result, or graph in the left sidebar and choose **Rename…**
+to give it a descriptive name. Press **Enter** or click **Rename** to apply it;
+**Escape** or **Cancel** leaves the original name unchanged. Names are autosaved
+and included when you save and reopen a project file. Renaming a sidebar item
+does not change its data or a graph's figure title.
+
 ### Working with the data grid
 The grid behaves like a spreadsheet:
 - **Click + drag** to select a range of cells; **Shift+click** or **Shift+arrows** to extend.
@@ -161,6 +167,7 @@ Run the checks (requires Node and Python):
 ```bash
 node tests/check.js         # stats tests vs an independent Python oracle
 node tests/prism.check.js   # .prism import mapping (pure Node, no Python)
+npm run test:ui             # sidebar rename and persistence (requires Electron/display)
 ```
 
 ## Data formats

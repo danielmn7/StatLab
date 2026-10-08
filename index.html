@@ -109,6 +109,23 @@
     </div>
   </div>
 
+  <!-- Modal: Rename a sidebar item -->
+  <div class="modal-backdrop" id="modal-rename" hidden>
+    <form class="modal" id="rename-form" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+      <div class="modal-head"><h2 id="rename-title">Rename table</h2><button type="button" class="modal-x" data-close aria-label="Cancel rename">×</button></div>
+      <div class="modal-body">
+        <div class="opt-row">
+          <label for="rename-name">Name</label>
+          <input class="inp" type="text" id="rename-name" required autocomplete="off" style="flex:1;min-width:0" />
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-accent">Rename</button>
+      </div>
+    </form>
+  </div>
+
   <!-- Modal: Restore previous session (shown at startup when an autosave exists) -->
   <div class="modal-backdrop" id="modal-restore" hidden>
     <div class="modal">

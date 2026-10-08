@@ -1931,6 +1931,27 @@
     afterDelete(); toast('Deleted graph');
   }
 
+  // Rename the navigator label without changing ids, data, or figure titles.
+  // Use an in-app form: window.prompt is not supported by Electron.
+  function renameNavItem(item, view) {
+    const input = $('#rename-name');
+    $('#rename-title').textContent = 'Rename ' + ({ data: 'table', result: 'result', graph: 'graph' }[view]);
+    input.value = item.name;
+    input.setCustomValidity('');
+    input.oninput = () => input.setCustomValidity('');
+    $('#rename-form').onsubmit = (e) => {
+      e.preventDefault();
+      const name = input.value.trim();
+      if (!name) { input.setCustomValidity('Enter a name.'); input.reportValidity(); return; }
+      hideModal('modal-rename');
+      if (name === item.name) return;
+      item.name = name;
+      renderNavigator(); renderContent(); saveState();
+    };
+    showModal('modal-rename');
+    input.focus(); input.select();
+  }
+
   // ---------- lightweight context menu (right-click on navigator items) ----------
   function showContextMenu(x, y, items) {
     const existing = $('#ctx-menu'); if (existing) existing.remove();
@@ -1950,7 +1971,11 @@
   }
   function navContextMenu(e, item, view) {
     e.preventDefault();
-    const items = [{ label: 'Open', onClick: () => setActive(view, item.id) }, { sep: true }];
+    const items = [
+      { label: 'Open', onClick: () => setActive(view, item.id) },
+      { label: '✎ Rename…', onClick: () => renameNavItem(item, view) },
+      { sep: true },
+    ];
     if (view === 'data') {
       const c = relatedCounts(item.id);
       const tail = (c.results + c.graphs) ? ' & related' : '';
