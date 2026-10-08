@@ -48,6 +48,7 @@
   const App = {
     tables: [], results: [], graphs: [],
     active: null, // {view:'data'|'result'|'graph', id}
+    navCollapsed: new Set(), // 'data:<tableId>' | 'result:<tableId>' | 'graph:<tableId>'
     counter: 1,
     projectFileName: null,  // display name of the open project file, or null when unsaved
     projectFileHandle: null, // File System Access handle (browser) so Save can overwrite
@@ -58,7 +59,20 @@
     return list.find((x) => x.id === App.active.id);
   }
   function tableById(id) { return App.tables.find((t) => t.id === id); }
-  function setActive(view, id) { App.active = { view, id }; renderNavigator(); renderContent(); }
+  function setActive(view, id) {
+    App.active = { view, id };
+    // New analyses/graphs and links from the content pane reveal their ancestors.
+    // Opening a table itself leaves its disclosure state alone.
+    const item = activeObj();
+    if (view !== 'data' && item && tableById(item.tableId)) {
+      const tableOpened = App.navCollapsed.delete('data:' + item.tableId);
+      const groupOpened = App.navCollapsed.delete(view + ':' + item.tableId);
+      if (tableOpened || groupOpened) saveState();
+    }
+    renderNavigator(); renderContent();
+    const navItem = $('#navigator .nav-item.active');
+    if (navItem) navItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 
   // Data edits must invalidate every graph/result derived from the edited table.
   // Visual controls are intentionally preserved while data-derived fields (means,
@@ -109,27 +123,71 @@
   }
 
   // ---------- navigator ----------
+  function navDisclosure(key, label, children, className, ...kids) {
+    children.hidden = App.navCollapsed.has(key);
+    const toggle = el('button', {
+      type: 'button', class: className, 'aria-controls': children.id,
+      onclick: () => {
+        children.hidden = !children.hidden;
+        if (children.hidden) App.navCollapsed.add(key);
+        else App.navCollapsed.delete(key);
+        update(); saveState();
+      },
+    }, el('span', { class: 'nav-caret', 'aria-hidden': 'true' }, '›'), ...kids);
+    function update() {
+      const action = children.hidden ? 'Expand ' : 'Collapse ';
+      toggle.setAttribute('aria-expanded', String(!children.hidden));
+      toggle.setAttribute('aria-label', action + label);
+      toggle.title = action + label;
+    }
+    update();
+    return toggle;
+  }
   function renderNavigator() {
-    const mk = (item, view, icon) => {
-      const isTable = view === 'data';
-      const hasGraph = isTable && App.graphs.some((g) => g.tableId === item.id);
-      return el('li', {
+    const mk = (item, view, icon, ...kids) => el('button', {
+        type: 'button', 'data-view': view, 'data-id': item.id,
         class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
-        title: 'Right-click for options',
+        'aria-current': App.active && App.active.view === view && App.active.id === item.id ? 'page' : null,
+        title: item.name + '\nRight-click for options',
         onclick: () => setActive(view, item.id),
         oncontextmenu: (e) => navContextMenu(e, item, view),
-      }, el('span', { class: 'ico' }, icon), item.name,
-        hasGraph ? el('span', { class: 'graph-status', title: 'This table has a graph' }, '✓') : null);
+      }, el('span', { class: 'ico', 'aria-hidden': 'true' }, icon), el('span', { class: 'nav-label' }, item.name), ...kids);
+    const leaves = (items, view, icon) => items.map((item) => el('li', { class: 'nav-entry' }, mk(item, view, icon)));
+    const group = (items, view, label, icon, table, index) => {
+      const list = el('ul', { id: 'nav-' + view + '-' + index, class: 'nav-list nav-leaves nav-' + (view === 'result' ? 'results' : 'graphs'), 'aria-label': label + ' for ' + table.name }, ...leaves(items, view, icon));
+      return el('li', { class: 'nav-group', 'data-view': view },
+        navDisclosure(view + ':' + table.id, label + ' for ' + table.name, list, 'nav-group-toggle',
+          el('span', { class: 'nav-label' }, label), el('span', { class: 'nav-count' }, String(items.length))), list);
     };
+
+    const linked = new Map(App.tables.map((t) => [t.id, { results: [], graphs: [] }]));
+    const unlinked = { results: [], graphs: [] };
+    App.results.forEach((r) => (linked.get(r.tableId) || unlinked).results.push(r));
+    App.graphs.forEach((g) => (linked.get(g.tableId) || unlinked).graphs.push(g));
+    // Names are text nodes; innerHTML is used here only to clear existing lists.
     const tl = $('#nav-tables'); tl.innerHTML = '';
     if (!App.tables.length) tl.append(el('li', { class: 'nav-empty' }, 'No tables yet'));
-    App.tables.forEach((t) => tl.append(mk(t, 'data', t.type === 'survival' ? '⏱️' : t.type === 'xy' ? '📈' : '▦')));
-    const rl = $('#nav-results'); rl.innerHTML = '';
-    if (!App.results.length) rl.append(el('li', { class: 'nav-empty' }, 'No results yet'));
-    App.results.forEach((r) => rl.append(mk(r, 'result', '∑')));
-    const gl = $('#nav-graphs'); gl.innerHTML = '';
-    if (!App.graphs.length) gl.append(el('li', { class: 'nav-empty' }, 'No graphs yet'));
-    App.graphs.forEach((g) => gl.append(mk(g, 'graph', '◧')));
+    App.tables.forEach((t, index) => {
+      const { results, graphs } = linked.get(t.id), count = results.length + graphs.length;
+      const children = el('ul', { id: 'nav-children-' + index, class: 'nav-list nav-children' });
+      if (results.length) children.append(group(results, 'result', 'Results', '∑', t, index));
+      if (graphs.length) children.append(group(graphs, 'graph', 'Graphs', '◧', t, index));
+      const activeChild = App.active && App.active.view !== 'data' &&
+        (App.active.view === 'result' ? results : graphs).some((item) => item.id === App.active.id);
+      const row = el('div', { class: 'nav-table-row' + (activeChild ? ' has-active-child' : '') },
+        count ? navDisclosure('data:' + t.id, t.name, children, 'nav-toggle') : el('span', { class: 'nav-toggle-spacer', 'aria-hidden': 'true' }),
+        mk(t, 'data', t.type === 'survival' ? '⏱️' : t.type === 'xy' ? '📈' : '▦',
+          count ? el('span', { class: 'nav-count', title: plural(results.length, 'result') + ', ' + plural(graphs.length, 'graph') }, String(count)) : null));
+      tl.append(el('li', { class: 'nav-branch', 'data-table-id': t.id }, row, count ? children : null));
+    });
+
+    // Older or partially recovered projects must not silently lose orphaned items.
+    const ul = $('#nav-unlinked'); ul.innerHTML = '';
+    $('#nav-unlinked-section').hidden = !unlinked.results.length && !unlinked.graphs.length;
+    if (unlinked.results.length) ul.append(el('li', { class: 'nav-group' }, el('div', { class: 'nav-group-label' }, 'Results'),
+      el('ul', { class: 'nav-list nav-leaves nav-results' }, ...leaves(unlinked.results, 'result', '∑'))));
+    if (unlinked.graphs.length) ul.append(el('li', { class: 'nav-group' }, el('div', { class: 'nav-group-label' }, 'Graphs'),
+      el('ul', { class: 'nav-list nav-leaves nav-graphs' }, ...leaves(unlinked.graphs, 'graph', '◧'))));
   }
 
   // ---------- content dispatch ----------
@@ -490,6 +548,27 @@
 
   // ---------- analyze modal ----------
   let analyzeState = null;
+  const DIRECTIONAL_TESTS = new Set(['onesample-t', 'unpaired-t', 'paired-t', 'mannwhitney', 'wilcoxon', 'pearson', 'spearman', 'regression']);
+  function tailName(alternative) { return alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative; }
+  function hypothesisText(table, kind, alternative, mu0) {
+    const op = alternative === 'greater' ? '>' : alternative === 'less' ? '<' : '≠';
+    if (kind === 'pearson' || kind === 'spearman') return `${kind === 'pearson' ? 'r' : 'ρ'} ${op} 0`;
+    if (kind === 'regression') return `slope ${op} 0`;
+    const gs = table.groups();
+    if (kind === 'onesample-t') return `mean of ${gs[0].name} ${op} ${mu0 === undefined ? 'hypothetical mean' : num(mu0)}`;
+    if (kind === 'wilcoxon' && gs.length === 1) return `median of ${gs[0].name} ${op} ${mu0 === undefined ? 'hypothetical median' : num(mu0)}`;
+    if (kind === 'paired-t' || kind === 'wilcoxon') return `${kind === 'paired-t' ? 'mean' : 'median'} paired difference (${gs[0].name} − ${gs[1].name}) ${op} 0`;
+    if (kind === 'mannwhitney') return alternative === 'two-sided'
+      ? `${gs[0].name} and ${gs[1].name} differ in distribution`
+      : `${gs[0].name} values tend to be ${alternative === 'greater' ? 'greater' : 'less'} than ${gs[1].name} values`;
+    return `mean of ${gs[0].name} ${op} mean of ${gs[1].name}`;
+  }
+  function pText(p) { const ps = fmtP(p); return /^[<>]/.test(ps) ? 'p ' + ps : 'p = ' + ps; }
+  function hypothesisVerdict(table, spec, alternative, p, sigText, nsText) {
+    if (alternative === 'two-sided') return verdict(p, sigText, nsText);
+    const h = hypothesisText(table, spec.kind, alternative, spec.mu0 === undefined ? 0 : spec.mu0);
+    return verdict(p, `Significant evidence for the selected hypothesis: ${h}.`, `No significant evidence for the selected hypothesis: ${h}.`);
+  }
   function applicableTests(table) {
     if (table.type === 'survival') {
       return [{ kind: 'survival', name: 'Kaplan-Meier + log-rank', desc: 'Survival curves and group comparison', tag: 'Survival' }];
@@ -568,10 +647,18 @@
     if (kind === 'unpaired-t') {
       box.append(sel('Variance assumption', 'welch', [{ v: 'welch', t: "Welch's correction (recommended — unequal variances)" }, { v: 'student', t: "Student's (assume equal variances)" }], 'welch'));
     }
-    if (kind === 'onesample-t') {
+    if (kind === 'onesample-t' || (kind === 'wilcoxon' && table.groups().length === 1)) {
       p.mu0 = p.mu0 || '0';
-      box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Hypothetical mean (H₀)'),
+      box.append(el('div', { class: 'opt-row' }, el('label', {}, kind === 'wilcoxon' ? 'Hypothetical median (H₀)' : 'Hypothetical mean (H₀)'),
         el('input', { class: 'inp', type: 'number', value: p.mu0, oninput: (e) => { p.mu0 = e.target.value; } })));
+    }
+    if (DIRECTIONAL_TESTS.has(kind)) {
+      p.alternative = p.alternative || 'two-sided';
+      box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-alternative' }, 'Alternative hypothesis'),
+        el('select', { id: 'analyze-alternative', class: 'inp', style: 'flex:1;min-width:0', onchange: (e) => { p.alternative = e.target.value; } },
+          ...['two-sided', 'greater', 'less'].map((v) => el('option', { value: v, selected: p.alternative === v },
+            `${v === 'two-sided' ? 'Two-tailed' : 'One-tailed'} — ${hypothesisText(table, kind, v)}`)))));
+      box.append(el('div', { class: 'note' }, 'Choose a one-tailed direction only for a hypothesis specified before examining the data. The opposite direction will not count as significant.'));
     }
     const pairPicker = (gnames) => {
       if (!p.pairs) p.pairs = [];
@@ -656,8 +743,9 @@
   }
   function normalizeParams(kind, p) {
     const out = {};
+    if (DIRECTIONAL_TESTS.has(kind)) out.alternative = p.alternative || 'two-sided';
     if (kind === 'unpaired-t') out.welch = p.welch !== 'student';
-    if (kind === 'onesample-t') out.mu0 = parseFloat(p.mu0) || 0;
+    if (kind === 'onesample-t' || (kind === 'wilcoxon' && p.mu0 != null)) out.mu0 = parseFloat(p.mu0) || 0;
     if (kind === 'anova') {
       const mode = p.compMode || 'tukey';
       if (mode === 'custom') { out.posthoc = 'custom'; out.pairs = p.pairs || []; out.correction = p.customCorr || 'sidak'; }
@@ -696,11 +784,9 @@
 
   function verdict(p, sigText, nsText) {
     const sig = p < 0.05;
-    const ps = fmtP(p);
-    const pPhrase = /^[<>]/.test(ps) ? 'p ' + ps : 'p = ' + ps;
     return el('div', { class: 'verdict ' + (sig ? 'sig' : 'ns') },
       el('span', { class: 'vicon' }, sig ? '✓' : '○'),
-      el('span', { html: (sig ? sigText : nsText) + ` <b>(${pPhrase}${sig ? ', ' + stars(p) : ''})</b>` }));
+      el('span', {}, sig ? sigText : nsText, ' ', el('b', {}, `(${pText(p)}${sig ? ', ' + stars(p) : ''})`)));
   }
   function statRow(k, v) { return el('tr', {}, el('th', {}, k), el('td', { class: 'num' }, v)); }
   function statsTable(rows) { return el('table', { class: 'stats' }, el('tbody', {}, ...rows.map(([k, v]) => statRow(k, v)))); }
@@ -740,10 +826,28 @@
       : 'Grouped table — each dataset column is analyzed as one group (values pooled across rows).');
   }
 
+  // Match the nonempty groups without dropping blank rows within paired columns.
+  function rawColumnGroups(table) {
+    return table.columns.map((_, i) => table.rawColumn(i)).filter((raw) => T.clean(raw).length > 0);
+  }
+
   function compute(table, spec) {
     const kind = spec.kind;
+    const alternative = spec.alternative === undefined ? 'two-sided' : spec.alternative;
+    const hypothesis = () => hypothesisText(table, kind, alternative, spec.mu0 === undefined ? 0 : spec.mu0);
+    const pLabel = 'P value (' + tailName(alternative) + ')';
+    const reportP = (p) => `${pText(p)} (${tailName(alternative)}; H₁: ${hypothesis()})`;
     const groups = table.type === 'column' ? table.groups() : (table.type === 'grouped' ? groupedUnits(table) : null);
-    const wrap = (title, node, graphSpec) => ({ title, html: node, graphSpec });
+    const wrap = (title, node, graphSpec) => {
+      if (DIRECTIONAL_TESTS.has(kind)) {
+        const body = $('.result-body', node);
+        body.prepend(el('div', { class: 'note hypothesis-note' }, `${tailName(alternative)}; H₁: ${hypothesis()}`));
+        if (alternative !== 'two-sided' && ['onesample-t', 'unpaired-t', 'paired-t', 'pearson', 'spearman', 'regression'].includes(kind)) {
+          body.append(el('div', { class: 'note' }, 'Confidence intervals and graph bands shown remain two-sided 95% intervals.'));
+        }
+      }
+      return { title, html: node, graphSpec };
+    };
 
     if (kind === 'descriptive') {
       const gs = table.type === 'xy' ? table.columns.map((c, i) => ({ name: c.name, values: table.numColumn(i) })) : groups;
@@ -767,55 +871,65 @@
     }
 
     if (kind === 'onesample-t') {
-      const g = groups[0]; const r = T.oneSampleT(g.values, spec.mu0);
+      const g = groups[0]; const r = T.oneSampleT(g.values, spec.mu0, alternative);
       const node = card('One-sample t test — ' + g.name,
-        verdict(r.p, `The mean (${num(r.mean)}) is significantly different from ${num(spec.mu0)}.`, `No significant difference from ${num(spec.mu0)}.`),
-        statsTable([['Mean (95% CI)', `${num(r.mean)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`], ['Hypothetical mean', num(spec.mu0)], ['t', num(r.t, 4)], ['df', r.df], ['P value', fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)]]),
-        apaLine(`t(${r.df}) = ${num(r.t, 3)}, p ${r.p < 0.0001 ? '< .0001' : '= ' + fmtP(r.p)}, d = ${num(r.cohenD, 2)}.`),
+        hypothesisVerdict(table, spec, alternative, r.p, `The mean (${num(r.mean)}) is significantly different from ${num(r.mu0)}.`, `No significant difference from ${num(r.mu0)}.`),
+        statsTable([['Mean (95% CI)', `${num(r.mean)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`], ['Hypothetical mean', num(r.mu0)], ['t', num(r.t, 4)], ['df', r.df], [pLabel, fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)]]),
+        apaLine(`t(${r.df}) = ${num(r.t, 3)}, ${reportP(r.p)}, d = ${num(r.cohenD, 2)}.`),
         assumptionNote(g.values));
       return wrap('One-sample t: ' + g.name, node, graphSpec('bar', groups, { title: table.name, yLabel: g.name, errorType: 'sem' }));
     }
 
     if (kind === 'unpaired-t') {
-      const [a, b] = groups; const r = T.unpairedT(a.values, b.values, spec.welch);
+      const [a, b] = groups; const r = T.unpairedT(a.values, b.values, spec.welch, alternative);
       const sg = [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }];
       const node = card(r.test + ` — ${a.name} vs ${b.name}`,
-        verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
+        hypothesisVerdict(table, spec, alternative, r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([
           [a.name + ' (mean ± SD)', `${num(r.mean1)} ± ${num(r.sd1)}  (n=${r.n1})`],
           [b.name + ' (mean ± SD)', `${num(r.mean2)} ± ${num(r.sd2)}  (n=${r.n2})`],
           ['Difference (95% CI)', `${num(r.diff)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`],
-          ['t', num(r.t, 4)], ['df', num(r.df, r.welch ? 2 : 0)], ['P value', fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)],
+          ['t', num(r.t, 4)], ['df', num(r.df, r.welch ? 2 : 0)], [pLabel, fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)],
         ]),
-        apaLine(`${a.name} (M = ${num(r.mean1, 3)}, SD = ${num(r.sd1, 3)}) vs ${b.name} (M = ${num(r.mean2, 3)}, SD = ${num(r.sd2, 3)}); ${r.welch ? "Welch's " : ''}t(${num(r.df, 2)}) = ${num(r.t, 3)}, p ${r.p < 0.0001 ? '< .0001' : '= ' + fmtP(r.p)}, d = ${num(r.cohenD, 2)}.`),
+        apaLine(`${a.name} (M = ${num(r.mean1, 3)}, SD = ${num(r.sd1, 3)}) vs ${b.name} (M = ${num(r.mean2, 3)}, SD = ${num(r.sd2, 3)}); ${r.welch ? "Welch's " : ''}t(${num(r.df, 2)}) = ${num(r.t, 3)}, ${reportP(r.p)}, d = ${num(r.cohenD, 2)}.`),
         assumptionNote(a.values, b.values));
       return wrap(`t test: ${a.name} vs ${b.name}`, node, graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sg }));
     }
 
     if (kind === 'paired-t') {
-      const [a, b] = groups; const r = T.pairedT(table.rawColumn(0), table.rawColumn(1));
+      const [a, b] = groups, [rawA, rawB] = rawColumnGroups(table); const r = T.pairedT(rawA, rawB, alternative);
       const node = card('Paired t test — ' + a.name + ' vs ' + b.name,
-        verdict(r.p, 'The paired difference is statistically significant.', 'No significant paired difference.'),
-        statsTable([['Mean difference (95% CI)', `${num(r.meanDiff)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`], ['SD of differences', num(r.sdDiff)], ['n pairs', r.n], ['t', num(r.t, 4)], ['df', r.df], ['P value', fmtP(r.p)], ["Cohen's dz", num(r.cohenDz, 3)]]),
-        apaLine(`t(${r.df}) = ${num(r.t, 3)}, p ${r.p < 0.0001 ? '< .0001' : '= ' + fmtP(r.p)}, dz = ${num(r.cohenDz, 2)}.`));
-      return wrap(`Paired t: ${a.name} vs ${b.name}`, node, graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: a.name, labelB: b.name, colA: table.rawColumn(0), colB: table.rawColumn(1) }));
+        hypothesisVerdict(table, spec, alternative, r.p, 'The paired difference is statistically significant.', 'No significant paired difference.'),
+        statsTable([['Mean difference (95% CI)', `${num(r.meanDiff)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`], ['SD of differences', num(r.sdDiff)], ['n pairs', r.n], ['t', num(r.t, 4)], ['df', r.df], [pLabel, fmtP(r.p)], ["Cohen's dz", num(r.cohenDz, 3)]]),
+        apaLine(`t(${r.df}) = ${num(r.t, 3)}, ${reportP(r.p)}, dz = ${num(r.cohenDz, 2)}.`));
+      return wrap(`Paired t: ${a.name} vs ${b.name}`, node, graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: a.name, labelB: b.name, colA: rawA, colB: rawB }));
     }
 
     if (kind === 'mannwhitney') {
-      const [a, b] = groups; const r = T.mannWhitney(a.values, b.values);
+      const [a, b] = groups; const r = T.mannWhitney(a.values, b.values, alternative);
       const node = card('Mann-Whitney U test — ' + a.name + ' vs ' + b.name,
-        verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
-        statsTable([['Mann-Whitney U', num(r.U, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], ['P value (two-tailed)', fmtP(r.p)]]),
+        hypothesisVerdict(table, spec, alternative, r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
+        statsTable([[alternative === 'two-sided' ? 'Mann-Whitney U' : 'Mann-Whitney U (first group)', num(alternative === 'two-sided' ? r.U : r.U1, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], [pLabel, fmtP(r.p)]]),
+        apaLine(`U = ${num(alternative === 'two-sided' ? r.U : r.U1, 1)}, ${reportP(r.p)}.`),
         el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value (small sample, no ties).' : 'Normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
       return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }] }));
     }
 
     if (kind === 'wilcoxon') {
-      const r = T.wilcoxonSignedRank(table.rawColumn(0), table.rawColumn(1));
-      const node = card('Wilcoxon matched-pairs signed rank test',
-        verdict(r.p, 'The paired difference is statistically significant.', 'No significant paired difference.'),
-        statsTable([['W (signed-rank)', num(r.W, 1)], ['Sum of positive ranks', num(r.Wpos, 1)], ['Sum of negative ranks', num(r.Wneg, 1)], ['n pairs (non-zero)', r.n], ['P value', fmtP(r.p)]]));
-      return wrap('Wilcoxon signed-rank', node, graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: groups[0].name, labelB: groups[1].name, colA: table.rawColumn(0), colB: table.rawColumn(1) }));
+      const [rawA, pairedB] = rawColumnGroups(table), oneSample = groups.length === 1;
+      const mu0 = spec.mu0 === undefined ? 0 : spec.mu0;
+      const rawB = oneSample ? rawA.map(() => mu0) : pairedB;
+      const r = T.wilcoxonSignedRank(rawA, rawB, alternative);
+      const W = alternative === 'two-sided' ? r.W : r.Wpos;
+      const node = card(oneSample ? 'Wilcoxon one-sample signed-rank test — ' + groups[0].name : 'Wilcoxon matched-pairs signed rank test',
+        hypothesisVerdict(table, spec, alternative, r.p, oneSample ? `The median differs significantly from ${num(mu0)}.` : 'The paired difference is statistically significant.', oneSample ? `No significant difference from ${num(mu0)}.` : 'No significant paired difference.'),
+        statsTable([[alternative === 'two-sided' ? 'W (signed-rank)' : 'W (positive ranks)', num(W, 1)], ['Sum of positive ranks', num(r.Wpos, 1)], ['Sum of negative ranks', num(r.Wneg, 1)], [oneSample ? 'n values (non-zero differences)' : 'n pairs (non-zero)', r.n], ...(oneSample ? [['Hypothetical median', num(mu0)]] : []), ['Method', r.method], [pLabel, fmtP(r.p)]]),
+        apaLine(`W = ${num(W, 1)}, ${reportP(r.p)}.`),
+        el('div', { class: 'note' }, 'Normal approximation with continuity and tie correction; zero differences are omitted.'));
+      const gspec = oneSample
+        ? graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none' })
+        : graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: groups[0].name, labelB: groups[1].name, colA: rawA, colB: rawB });
+      return wrap('Wilcoxon signed-rank', node, gspec);
     }
 
     if (kind === 'anova') {
@@ -857,27 +971,27 @@
 
     if (kind === 'pearson' || kind === 'spearman') {
       const xr = table.rawColumn(0), yr = table.rawColumn(1);
-      const r = kind === 'pearson' ? T.pearson(xr, yr) : T.spearman(xr, yr);
+      const r = kind === 'pearson' ? T.pearson(xr, yr, alternative) : T.spearman(xr, yr, alternative);
       const coef = kind === 'pearson' ? r.r : r.rho;
       const node = card((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation',
-        verdict(r.p, `Significant ${kind === 'pearson' ? 'linear' : 'monotonic'} correlation (${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}).`, 'No significant correlation.'),
-        statsTable([[kind === 'pearson' ? 'r' : 'ρ (rho)', num(coef, 4)], ...(kind === 'pearson' ? [['95% CI for r', `${num(r.ci95lo, 3)} – ${num(r.ci95hi, 3)}`], ['R²', num(r.r2, 4)]] : []), ['n', r.n], ['P value (two-tailed)', fmtP(r.p)]]),
-        apaLine(`${kind === 'pearson' ? 'r' : 'rₛ'}(${r.n - 2}) = ${num(coef, 2)}, p ${r.p < 0.0001 ? '< .0001' : '= ' + fmtP(r.p)}.`));
+        hypothesisVerdict(table, spec, alternative, r.p, `Significant ${kind === 'pearson' ? 'linear' : 'monotonic'} correlation (${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}).`, 'No significant correlation.'),
+        statsTable([[kind === 'pearson' ? 'r' : 'ρ (rho)', num(coef, 4)], ...(kind === 'pearson' ? [['95% CI for r', `${num(r.ci95lo, 3)} – ${num(r.ci95hi, 3)}`], ['R²', num(r.r2, 4)]] : []), ['n', r.n], [pLabel, fmtP(r.p)]]),
+        apaLine(`${kind === 'pearson' ? 'r' : 'rₛ'}(${r.n - 2}) = ${num(coef, 2)}, ${reportP(r.p)}.`));
       const reg = T.linearRegression(xr, yr);
-      return wrap((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation', node, xySpec(table, reg, kind === 'pearson' ? `r = ${num(coef, 3)}, p = ${fmtP(r.p)}` : `ρ = ${num(coef, 3)}, p = ${fmtP(r.p)}`));
+      return wrap((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation', node, xySpec(table, reg, `${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}, ${pText(r.p)} (${tailName(alternative)})`));
     }
 
     if (kind === 'regression') {
-      const r = T.linearRegression(table.rawColumn(0), table.rawColumn(1));
+      const r = T.linearRegression(table.rawColumn(0), table.rawColumn(1), alternative);
       const node = card('Simple linear regression',
-        verdict(r.pSlope, 'The slope is significantly non-zero.', 'The slope is not significantly different from zero.'),
+        hypothesisVerdict(table, spec, alternative, r.pSlope, 'The slope is significantly non-zero.', 'The slope is not significantly different from zero.'),
         statsTable([
           ['Slope (95% CI)', `${num(r.slope, 5)}  (${num(r.slopeCIlo, 4)} – ${num(r.slopeCIhi, 4)})`],
           ['Y-intercept (95% CI)', `${num(r.intercept, 5)}  (${num(r.intCIlo, 4)} – ${num(r.intCIhi, 4)})`],
           ['R²', num(r.r2, 5)], ['Sy.x (residual SD)', num(r.sy_x, 4)], ['n', r.n],
-          ['t (slope)', num(r.tSlope, 4)], ['df', r.df], ['P value (slope ≠ 0)', fmtP(r.pSlope)],
+          ['t (slope)', num(r.tSlope, 4)], ['df', r.df], [pLabel, fmtP(r.pSlope)],
         ]),
-        apaLine(`Y = ${num(r.slope, 4)}·X ${r.intercept >= 0 ? '+' : '−'} ${num(Math.abs(r.intercept), 4)};  R² = ${num(r.r2, 3)}, p ${r.pSlope < 0.0001 ? '< .0001' : '= ' + fmtP(r.pSlope)}.`));
+        apaLine(`Y = ${num(r.slope, 4)}·X ${r.intercept >= 0 ? '+' : '−'} ${num(Math.abs(r.intercept), 4)};  R² = ${num(r.r2, 3)}, ${reportP(r.pSlope)}.`));
       return wrap('Linear regression', node, xySpec(table, r, `Y = ${num(r.slope, 3)}X ${r.intercept >= 0 ? '+' : '−'} ${num(Math.abs(r.intercept), 3)}  ·  R² = ${num(r.r2, 3)}`));
     }
 
@@ -1764,6 +1878,7 @@
       results: App.results.map((r) => ({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, graphId: r.graphId })),
       graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec })),
       active: App.active,
+      navigator: { collapsed: Array.from(App.navCollapsed) },
     };
   }
   function restoreSnapshot(s) {
@@ -1780,6 +1895,9 @@
     });
     const ids = App.tables.concat(App.results, App.graphs).map((x) => x.id);
     App.active = s.active && ids.includes(s.active.id) ? s.active : (App.tables[0] ? { view: 'data', id: App.tables[0].id } : null);
+    const navKeys = new Set(App.tables.flatMap((t) => ['data:', 'result:', 'graph:'].map((prefix) => prefix + t.id)));
+    const collapsed = s.navigator && Array.isArray(s.navigator.collapsed) ? s.navigator.collapsed : [];
+    App.navCollapsed = new Set(collapsed.filter((key) => navKeys.has(key)));
   }
   // Read the autosaved session WITHOUT loading it, so startup can offer a choice.
   function peekSavedState() {
@@ -1915,6 +2033,7 @@
     App.tables = App.tables.filter((x) => x.id !== id);
     App.results = App.results.filter((r) => r.tableId !== id);
     App.graphs = App.graphs.filter((g) => g.tableId !== id);
+    ['data:', 'result:', 'graph:'].forEach((prefix) => App.navCollapsed.delete(prefix + id));
     afterDelete();
     toast('Deleted "' + t.name + '"' + (c.results + c.graphs ? ' and related analyses/graphs' : ''));
   }

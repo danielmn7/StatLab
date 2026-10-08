@@ -75,6 +75,15 @@ Import Data, Export Figure) with real file dialogs, plus Edit/View/Analyze menus
 
 Then **Load an example**, **Import data**, or **＋ New table** and start typing.
 
+The left sidebar groups each table's **Results** and **Graphs** underneath that
+data table. Click a table's arrow to expand/collapse everything beneath it, or
+collapse just its Results or Graphs group. Counts show how many items are inside.
+Clicking a table's name opens its data without changing its expanded state.
+New analyses and graphs automatically reveal their sidebar entry. Expanded and
+collapsed states are autosaved and included in project files; older projects are
+grouped automatically. Items whose source table is missing remain accessible under
+**Unlinked items**.
+
 Right-click a table, result, or graph in the left sidebar and choose **Rename…**
 to give it a descriptive name. Press **Enter** or click **Rename** to apply it;
 **Escape** or **Cancel** leaves the original name unchanged. Names are autosaved
@@ -106,6 +115,16 @@ The grid behaves like a spreadsheet:
   (non-parametric two-way). Every parametric test has a rank-based counterpart.
 - **Correlation & regression** — Pearson, Spearman, and simple linear regression
   with confidence bands.
+- **One-tailed tests** — in **Analyze → Alternative hypothesis**, choose the
+  default **Two-tailed**, or **One-tailed** in either direction. Available for
+  all t tests, Mann-Whitney, paired/one-sample Wilcoxon, Pearson/Spearman
+  correlation, and regression slopes. Group comparisons name the groups in
+  their original column order; paired differences are first group minus second
+  group. One-sample Wilcoxon also accepts a hypothetical median (default 0).
+  Results and report text identify the chosen hypothesis, which is retained
+  when projects reopen or data change. Confidence intervals and graph bands
+  remain **two-sided 95%** intervals. Choose a direction before inspecting the
+  data; an effect in the opposite direction is not significant for that test.
 - **Normality** — **Shapiro-Wilk** (Royston), **D'Agostino-Pearson** omnibus K²,
   and **Anderson-Darling**. Parametric tests auto-flag a normality check.
 - **Outliers** — **Grubbs'** test (single and iterative/ESD).
@@ -167,7 +186,7 @@ Run the checks (requires Node and Python):
 ```bash
 node tests/check.js         # stats tests vs an independent Python oracle
 node tests/prism.check.js   # .prism import mapping (pure Node, no Python)
-npm run test:ui             # sidebar rename and persistence (requires Electron/display)
+npm run test:ui             # nested sidebar, rename, hypothesis options, and persistence (requires Electron/display)
 ```
 
 ## Data formats

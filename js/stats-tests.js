@@ -74,20 +74,23 @@ const StatTests = (function (C) {
   }
 
   // ---------- t tests ----------
-  function oneSampleT(raw, mu0 = 0) {
+  // Alternatives change only p-values; all confidence intervals remain two-sided 95%.
+  function oneSampleT(raw, mu0 = 0, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const a = clean(raw); const n = a.length;
     const m = mean(a), s = sd(a), se = s / Math.sqrt(n);
     const t = (m - mu0) / se; const df = n - 1;
-    const p = C.studentTtwoTailP(t, df);
+    const p = C.studentTP(t, df, alternative);
     const tcrit = C.studentTinv(0.975, df);
     return {
-      test: 'One-sample t test', n, mean: m, sd: s, sem: se, mu0,
+      test: 'One-sample t test', alternative, n, mean: m, sd: s, sem: se, mu0,
       t, df, p, ci95lo: m - tcrit * se, ci95hi: m + tcrit * se,
       cohenD: (m - mu0) / s,
     };
   }
 
-  function unpairedT(raw1, raw2, welch = false) {
+  function unpairedT(raw1, raw2, welch = false, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const a = clean(raw1), b = clean(raw2);
     const n1 = a.length, n2 = b.length;
     const m1 = mean(a), m2 = mean(b);
@@ -104,18 +107,19 @@ const StatTests = (function (C) {
       df = n1 + n2 - 2;
     }
     const t = diff / se;
-    const p = C.studentTtwoTailP(t, df);
+    const p = C.studentTP(t, df, alternative);
     const tcrit = C.studentTinv(0.975, df);
     const sp = Math.sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2));
     return {
       test: welch ? "Welch's unpaired t test" : 'Unpaired t test (Student)',
       n1, n2, mean1: m1, mean2: m2, sd1: Math.sqrt(v1), sd2: Math.sqrt(v2),
       diff, se, t, df, p, ci95lo: diff - tcrit * se, ci95hi: diff + tcrit * se,
-      cohenD: diff / sp, welch,
+      cohenD: diff / sp, welch, alternative,
     };
   }
 
-  function pairedT(raw1, raw2) {
+  function pairedT(raw1, raw2, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const n = Math.min(raw1.length, raw2.length);
     const d = [];
     for (let i = 0; i < n; i++) {
@@ -125,11 +129,11 @@ const StatTests = (function (C) {
     const nn = d.length;
     const md = mean(d), s = sd(d), se = s / Math.sqrt(nn);
     const t = md / se, df = nn - 1;
-    const p = C.studentTtwoTailP(t, df);
+    const p = C.studentTP(t, df, alternative);
     const tcrit = C.studentTinv(0.975, df);
     // Pearson r between pairs
     return {
-      test: 'Paired t test', n: nn, meanDiff: md, sdDiff: s, semDiff: se,
+      test: 'Paired t test', alternative, n: nn, meanDiff: md, sdDiff: s, semDiff: se,
       t, df, p, ci95lo: md - tcrit * se, ci95hi: md + tcrit * se, cohenDz: md / s,
     };
   }
@@ -314,7 +318,25 @@ const StatTests = (function (C) {
   };
 
   // ---------- Mann-Whitney U ----------
+  function rankNormalResult(delta, variance, alternative) {
+    // A zero-variance rank distribution (all tied/zero differences) has no
+    // evidence against the null in either direction.
+    if (variance <= 0) return { z: 0, p: 1 };
+    const corrected = alternative === 'two-sided' ? Math.max(0, Math.abs(delta) - 0.5)
+      : delta + (alternative === 'less' ? 0.5 : -0.5);
+    const z = corrected / Math.sqrt(variance);
+    const p = alternative === 'two-sided' ? 2 * C.normalCDF(-z)
+      : C.normalCDF(alternative === 'less' ? z : -z);
+    return { z, p: Math.max(0, Math.min(1, p)) };
+  }
+
   function mannWhitneyCounts(n, m) {
+    // The distribution is symmetric in the sample sizes and about U=n*m/2.
+    // Iterate the smaller size to reduce cancellation in the generating
+    // polynomial, then mirror the reliable lower half. Direct upper-half
+    // coefficients otherwise accumulate roundoff (even becoming negative),
+    // which is especially destructive for small one-sided upper tails.
+    if (n > m) [n, m] = [m, n];
     const maxU = n * m;
     let poly = new Float64Array(maxU + 1);
     poly[0] = 1;
@@ -325,10 +347,12 @@ const StatTests = (function (C) {
       for (let k = i; k <= maxU; k++) tmp[k] += tmp[k - i]; // divide by (1-q^i)
       poly = tmp;
     }
+    for (let u = 0; u < maxU / 2; u++) poly[maxU - u] = poly[u];
     return poly;
   }
 
-  function mannWhitney(raw1, raw2) {
+  function mannWhitney(raw1, raw2, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const a = clean(raw1), b = clean(raw2);
     const n1 = a.length, n2 = b.length;
     const all = a.concat(b);
@@ -344,31 +368,44 @@ const StatTests = (function (C) {
     const varU = (n1 * n2 / 12) * ((N + 1) - tieTerm / (N * (N - 1)));
     let p, method, z = NaN;
     const smallEnough = n1 * n2 <= 100000 && maxUSafe(n1, n2);
-    if (!hasTies && smallEnough) {
+    if (n1 === 0 || n2 === 0) {
+      p = NaN;
+      method = 'insufficient data';
+    } else if (!hasTies && smallEnough) {
       const counts = mannWhitneyCounts(n1, n2);
       let total = 0; for (let k = 0; k < counts.length; k++) total += counts[k];
-      let cum = 0; for (let k = 0; k <= U; k++) cum += counts[k];
-      p = Math.min(1, 2 * cum / total);
+      // Discrete tails include the observed U1 in BOTH directions. In
+      // particular, the opposite tail is not 1 - half the two-sided p-value.
+      let cum = 0;
+      if (alternative === 'greater') {
+        for (let k = U1; k < counts.length; k++) cum += counts[k];
+      } else {
+        const limit = alternative === 'less' ? U1 : U;
+        for (let k = 0; k <= limit; k++) cum += counts[k];
+      }
+      p = Math.min(1, (alternative === 'two-sided' ? 2 : 1) * cum / total);
       method = 'exact';
     } else {
-      z = (Math.abs(U - meanU) - 0.5) / Math.sqrt(varU);
-      p = 2 * (1 - C.normalCDF(z));
+      ({ z, p } = rankNormalResult(U1 - meanU, varU, alternative));
       method = hasTies ? 'normal approximation (tie-corrected)' : 'normal approximation';
     }
     return {
       test: 'Mann-Whitney U test', n1, n2, U1, U2, U, R1, R2: sum(ranks.slice(n1)),
-      meanRank1: R1 / n1, meanRank2: sum(ranks.slice(n1)) / n2, z, p, method, hasTies,
+      meanRank1: R1 / n1, meanRank2: sum(ranks.slice(n1)) / n2, z, p, method, hasTies, alternative,
     };
   }
   function maxUSafe(n1, n2) { return n1 * n2 <= 40000; }
 
   // ---------- Wilcoxon signed-rank (paired) ----------
-  function wilcoxonSignedRank(raw1, raw2) {
+  function wilcoxonSignedRank(raw1, raw2, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const n = Math.min(raw1.length, raw2.length);
     const diffs = [];
+    let validPairs = 0;
     for (let i = 0; i < n; i++) {
       const x = Number(raw1[i]), y = Number(raw2[i]);
       if (raw1[i] !== '' && raw2[i] !== '' && raw1[i] != null && raw2[i] != null && !Number.isNaN(x) && !Number.isNaN(y)) {
+        validPairs++;
         const d = x - y; if (d !== 0) diffs.push(d);
       }
     }
@@ -380,9 +417,8 @@ const StatTests = (function (C) {
     const meanW = nr * (nr + 1) / 4;
     const tieTerm = sum(tieCounts.map((t) => t * t * t - t)) / 48;
     const varW = nr * (nr + 1) * (2 * nr + 1) / 24 - tieTerm;
-    const z = (Math.abs(W - meanW) - 0.5) / Math.sqrt(varW);
-    const p = 2 * (1 - C.normalCDF(z));
-    return { test: 'Wilcoxon matched-pairs signed rank test', n: nr, Wpos, Wneg, W, z, p, method: 'normal approximation' };
+    const { z, p } = validPairs > 0 ? rankNormalResult(Wpos - meanW, varW, alternative) : { z: NaN, p: NaN };
+    return { test: 'Wilcoxon matched-pairs signed rank test', alternative, n: nr, Wpos, Wneg, W, z, p, method: 'normal approximation' };
   }
 
   // ---------- Kruskal-Wallis ----------
@@ -436,7 +472,8 @@ const StatTests = (function (C) {
   }
 
   // ---------- correlation ----------
-  function pearson(rawX, rawY) {
+  function pearson(rawX, rawY, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const xs = [], ys = [];
     const n = Math.min(rawX.length, rawY.length);
     for (let i = 0; i < n; i++) {
@@ -450,13 +487,14 @@ const StatTests = (function (C) {
     const r = sxy / Math.sqrt(sxx * syy);
     const df = nn - 2;
     const t = r * Math.sqrt(df / (1 - r * r));
-    const p = C.studentTtwoTailP(t, df);
+    const p = C.studentTP(t, df, alternative);
     const z = Math.atanh(r), se = 1 / Math.sqrt(nn - 3);
     const zc = C.normalInv(0.975);
-    return { test: 'Pearson correlation', n: nn, r, r2: r * r, df, t, p, ci95lo: Math.tanh(z - zc * se), ci95hi: Math.tanh(z + zc * se) };
+    return { test: 'Pearson correlation', alternative, n: nn, r, r2: r * r, df, t, p, ci95lo: Math.tanh(z - zc * se), ci95hi: Math.tanh(z + zc * se) };
   }
 
-  function spearman(rawX, rawY) {
+  function spearman(rawX, rawY, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const xs = [], ys = [];
     const n = Math.min(rawX.length, rawY.length);
     for (let i = 0; i < n; i++) {
@@ -464,12 +502,13 @@ const StatTests = (function (C) {
       if (rawX[i] !== '' && rawY[i] !== '' && rawX[i] != null && rawY[i] != null && !Number.isNaN(x) && !Number.isNaN(y)) { xs.push(x); ys.push(y); }
     }
     const rx = rankData(xs).ranks, ry = rankData(ys).ranks;
-    const pr = pearson(rx, ry);
-    return { test: 'Spearman correlation', n: xs.length, rho: pr.r, df: pr.df, t: pr.t, p: pr.p };
+    const pr = pearson(rx, ry, alternative);
+    return { test: 'Spearman correlation', alternative, n: xs.length, rho: pr.r, df: pr.df, t: pr.t, p: pr.p };
   }
 
   // ---------- simple linear regression ----------
-  function linearRegression(rawX, rawY) {
+  function linearRegression(rawX, rawY, alternative = 'two-sided') {
+    C.validateAlternative(alternative);
     const xs = [], ys = [];
     const n = Math.min(rawX.length, rawY.length);
     for (let i = 0; i < n; i++) {
@@ -489,10 +528,10 @@ const StatTests = (function (C) {
     const seInt = Math.sqrt(mse * (1 / nn + (mx * mx) / sxx));
     const r2 = 1 - ssRes / syy;
     const tSlope = slope / seSlope;
-    const pSlope = C.studentTtwoTailP(tSlope, df);
+    const pSlope = C.studentTP(tSlope, df, alternative);
     const tcrit = C.studentTinv(0.975, df);
     return {
-      test: 'Simple linear regression', n: nn, slope, intercept, r2, df,
+      test: 'Simple linear regression', alternative, n: nn, slope, intercept, r2, df,
       seSlope, seInt, tSlope, pSlope, sy_x: Math.sqrt(mse),
       slopeCIlo: slope - tcrit * seSlope, slopeCIhi: slope + tcrit * seSlope,
       intCIlo: intercept - tcrit * seInt, intCIhi: intercept + tcrit * seInt,
