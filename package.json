@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node tests/check.js && node tests/prism.check.js && node tests/ui.check.js",
-    "test:ui": "electron tests/navigator.check.js && electron tests/analysis.check.js",
+    "test:ui": "electron tests/navigator.check.js && electron tests/sidebar.check.js && electron tests/analysis.check.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win"
   },

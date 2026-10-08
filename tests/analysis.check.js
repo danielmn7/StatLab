@@ -35,7 +35,7 @@ async function fixture(type, names, rows) {
   assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(json)})`));
 }
 async function openAnalysis(name) {
-  await run(`document.querySelector('#nav-tables .nav-item').click();
+  await run(`document.querySelector('#nav-tables .nav-item[data-view="data"]').click();
     Array.from(document.querySelectorAll('.view-actions button')).find((button) => button.textContent.includes('Analyze')).click()`);
   await run(`(() => {
     const card = Array.from(document.querySelectorAll('.test-opt')).find((item) => item.querySelector('.t-name').textContent.startsWith(${JSON.stringify(name)}));
@@ -114,6 +114,12 @@ app.whenReady().then(async () => {
       const result = saved.results[saved.results.length - 1];
       const details = await resultDetails();
       ok(label + ' stores ' + alternative, result.kind === test.kind && result.spec.alternative === alternative);
+      ok(label + ' nests the analysis and graph under their source table', await run(`(() => {
+        const result = document.querySelector('.nav-item[data-view="result"][data-id="${result.id}"]');
+        const graph = document.querySelector('.nav-item[data-view="graph"][data-id="${result.graphId}"]');
+        return result.closest('.nav-branch').dataset.tableId === ${JSON.stringify(result.tableId)} &&
+          graph.closest('.nav-branch').dataset.tableId === ${JSON.stringify(result.tableId)};
+      })()`));
       ok(label + ' labels ' + alternative + ' in result and report', details.pLabel === 'P value (' + (alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative) + ')' && details.hypothesis.includes('H₁:') && details.report.includes(alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative));
       ok(label + ' uses direction-aware significance for ' + alternative, details.significant === (alternative !== 'less'));
       ok(label + ' formats extreme p values without duplicate operators', !details.report.includes('p = >') && !details.report.includes('p = <'));
@@ -158,16 +164,28 @@ app.whenReady().then(async () => {
   // Changing data recomputes the stored alternative and the linked graph p value.
   await fixture('column', ['High', 'Low'], pairedRows);
   await openAnalysis('Unpaired t test');
+  await run(`document.querySelector('#analyze-go').click();
+    document.querySelector('.nav-group[data-view="result"] .nav-group-toggle').click();
+    document.querySelector('.nav-group[data-view="graph"] .nav-group-toggle').click();
+    document.querySelector('.nav-toggle').click()`);
+  await openAnalysis('Unpaired t test');
+  ok('opening data for a directional analysis leaves collapsed folders alone', await run(`document.querySelector('.nav-toggle').getAttribute('aria-expanded') === 'false'`));
   await choose('#analyze-alternative', 'greater');
   await run(`document.querySelector('#analyze-go').click()`);
   const before = await state();
-  await run(`document.querySelector('#nav-tables .nav-item').click();
+  const directional = before.results.at(-1);
+  const sourceGraph = before.graphs.find((graph) => graph.id === directional.graphId);
+  ok('new one-tailed result reveals its table and Results folder but preserves the Graphs fold', await run(`document.querySelector('.nav-toggle').getAttribute('aria-expanded') === 'true' && document.querySelector('.nav-group[data-view="result"] .nav-group-toggle').getAttribute('aria-expanded') === 'true' && document.querySelector('.nav-group[data-view="graph"] .nav-group-toggle').getAttribute('aria-expanded') === 'false' && document.querySelector('.nav-item[data-view="result"][data-id="${directional.id}"]').checkVisibility()`));
+  await screenshot('nested-one-tailed-result');
+  await run(`document.querySelector('#nav-tables .nav-item[data-view="data"]').click();
     const data = new DataTransfer(); data.setData('text/plain', ${JSON.stringify(pairedRows.map((row) => row.slice().reverse().join('\t')).join('\n'))});
     document.querySelector('.sheet-wrap').dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
-    document.querySelector('#nav-results .nav-item').click()`);
+    document.querySelector('.nav-item[data-view="result"][data-id="${directional.id}"]').click()`);
   const after = await state();
-  ok('data edits retain the chosen alternative', after.results[0].spec.alternative === 'greater');
-  ok('data edits recompute directional results and graph significance', !(await resultDetails()).significant && before.graphs[0].spec.opts.sig[0].p < 0.05 && after.graphs[0].spec.opts.sig[0].p > 0.95 && !after.graphs[0].spec.opts.sig[0].sig);
+  const updatedGraph = after.graphs.find((graph) => graph.id === directional.graphId);
+  ok('data edits retain the chosen alternative', after.results.find((result) => result.id === directional.id).spec.alternative === 'greater');
+  ok('data edits recompute directional results and graph significance', !(await resultDetails()).significant && sourceGraph.spec.opts.sig[0].p < 0.05 && updatedGraph.spec.opts.sig[0].p > 0.95 && !updatedGraph.spec.opts.sig[0].sig);
+  ok('directional recomputation preserves collapsed folders and the separate two-tailed analysis', after.navigator.collapsed.includes('graph:' + directional.tableId) && after.results[0].spec.alternative === 'two-sided' && after.graphs[0].spec.opts.sig[0].p < 0.05);
   ok('opposite-direction reports correctly show p > 0.9999', (await resultDetails()).report.includes('p > 0.9999'));
 
   await run(`new Promise((resolve, reject) => {

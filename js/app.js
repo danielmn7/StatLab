@@ -48,6 +48,7 @@
   const App = {
     tables: [], results: [], graphs: [],
     active: null, // {view:'data'|'result'|'graph', id}
+    navCollapsed: new Set(), // 'data:<tableId>' | 'result:<tableId>' | 'graph:<tableId>'
     counter: 1,
     projectFileName: null,  // display name of the open project file, or null when unsaved
     projectFileHandle: null, // File System Access handle (browser) so Save can overwrite
@@ -58,7 +59,20 @@
     return list.find((x) => x.id === App.active.id);
   }
   function tableById(id) { return App.tables.find((t) => t.id === id); }
-  function setActive(view, id) { App.active = { view, id }; renderNavigator(); renderContent(); }
+  function setActive(view, id) {
+    App.active = { view, id };
+    // New analyses/graphs and links from the content pane reveal their ancestors.
+    // Opening a table itself leaves its disclosure state alone.
+    const item = activeObj();
+    if (view !== 'data' && item && tableById(item.tableId)) {
+      const tableOpened = App.navCollapsed.delete('data:' + item.tableId);
+      const groupOpened = App.navCollapsed.delete(view + ':' + item.tableId);
+      if (tableOpened || groupOpened) saveState();
+    }
+    renderNavigator(); renderContent();
+    const navItem = $('#navigator .nav-item.active');
+    if (navItem) navItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 
   // Data edits must invalidate every graph/result derived from the edited table.
   // Visual controls are intentionally preserved while data-derived fields (means,
@@ -109,27 +123,71 @@
   }
 
   // ---------- navigator ----------
+  function navDisclosure(key, label, children, className, ...kids) {
+    children.hidden = App.navCollapsed.has(key);
+    const toggle = el('button', {
+      type: 'button', class: className, 'aria-controls': children.id,
+      onclick: () => {
+        children.hidden = !children.hidden;
+        if (children.hidden) App.navCollapsed.add(key);
+        else App.navCollapsed.delete(key);
+        update(); saveState();
+      },
+    }, el('span', { class: 'nav-caret', 'aria-hidden': 'true' }, '›'), ...kids);
+    function update() {
+      const action = children.hidden ? 'Expand ' : 'Collapse ';
+      toggle.setAttribute('aria-expanded', String(!children.hidden));
+      toggle.setAttribute('aria-label', action + label);
+      toggle.title = action + label;
+    }
+    update();
+    return toggle;
+  }
   function renderNavigator() {
-    const mk = (item, view, icon) => {
-      const isTable = view === 'data';
-      const hasGraph = isTable && App.graphs.some((g) => g.tableId === item.id);
-      return el('li', {
+    const mk = (item, view, icon, ...kids) => el('button', {
+        type: 'button', 'data-view': view, 'data-id': item.id,
         class: 'nav-item' + (App.active && App.active.view === view && App.active.id === item.id ? ' active' : ''),
-        title: 'Right-click for options',
+        'aria-current': App.active && App.active.view === view && App.active.id === item.id ? 'page' : null,
+        title: item.name + '\nRight-click for options',
         onclick: () => setActive(view, item.id),
         oncontextmenu: (e) => navContextMenu(e, item, view),
-      }, el('span', { class: 'ico' }, icon), item.name,
-        hasGraph ? el('span', { class: 'graph-status', title: 'This table has a graph' }, '✓') : null);
+      }, el('span', { class: 'ico', 'aria-hidden': 'true' }, icon), el('span', { class: 'nav-label' }, item.name), ...kids);
+    const leaves = (items, view, icon) => items.map((item) => el('li', { class: 'nav-entry' }, mk(item, view, icon)));
+    const group = (items, view, label, icon, table, index) => {
+      const list = el('ul', { id: 'nav-' + view + '-' + index, class: 'nav-list nav-leaves nav-' + (view === 'result' ? 'results' : 'graphs'), 'aria-label': label + ' for ' + table.name }, ...leaves(items, view, icon));
+      return el('li', { class: 'nav-group', 'data-view': view },
+        navDisclosure(view + ':' + table.id, label + ' for ' + table.name, list, 'nav-group-toggle',
+          el('span', { class: 'nav-label' }, label), el('span', { class: 'nav-count' }, String(items.length))), list);
     };
+
+    const linked = new Map(App.tables.map((t) => [t.id, { results: [], graphs: [] }]));
+    const unlinked = { results: [], graphs: [] };
+    App.results.forEach((r) => (linked.get(r.tableId) || unlinked).results.push(r));
+    App.graphs.forEach((g) => (linked.get(g.tableId) || unlinked).graphs.push(g));
+    // Names are text nodes; innerHTML is used here only to clear existing lists.
     const tl = $('#nav-tables'); tl.innerHTML = '';
     if (!App.tables.length) tl.append(el('li', { class: 'nav-empty' }, 'No tables yet'));
-    App.tables.forEach((t) => tl.append(mk(t, 'data', t.type === 'survival' ? '⏱️' : t.type === 'xy' ? '📈' : '▦')));
-    const rl = $('#nav-results'); rl.innerHTML = '';
-    if (!App.results.length) rl.append(el('li', { class: 'nav-empty' }, 'No results yet'));
-    App.results.forEach((r) => rl.append(mk(r, 'result', '∑')));
-    const gl = $('#nav-graphs'); gl.innerHTML = '';
-    if (!App.graphs.length) gl.append(el('li', { class: 'nav-empty' }, 'No graphs yet'));
-    App.graphs.forEach((g) => gl.append(mk(g, 'graph', '◧')));
+    App.tables.forEach((t, index) => {
+      const { results, graphs } = linked.get(t.id), count = results.length + graphs.length;
+      const children = el('ul', { id: 'nav-children-' + index, class: 'nav-list nav-children' });
+      if (results.length) children.append(group(results, 'result', 'Results', '∑', t, index));
+      if (graphs.length) children.append(group(graphs, 'graph', 'Graphs', '◧', t, index));
+      const activeChild = App.active && App.active.view !== 'data' &&
+        (App.active.view === 'result' ? results : graphs).some((item) => item.id === App.active.id);
+      const row = el('div', { class: 'nav-table-row' + (activeChild ? ' has-active-child' : '') },
+        count ? navDisclosure('data:' + t.id, t.name, children, 'nav-toggle') : el('span', { class: 'nav-toggle-spacer', 'aria-hidden': 'true' }),
+        mk(t, 'data', t.type === 'survival' ? '⏱️' : t.type === 'xy' ? '📈' : '▦',
+          count ? el('span', { class: 'nav-count', title: plural(results.length, 'result') + ', ' + plural(graphs.length, 'graph') }, String(count)) : null));
+      tl.append(el('li', { class: 'nav-branch', 'data-table-id': t.id }, row, count ? children : null));
+    });
+
+    // Older or partially recovered projects must not silently lose orphaned items.
+    const ul = $('#nav-unlinked'); ul.innerHTML = '';
+    $('#nav-unlinked-section').hidden = !unlinked.results.length && !unlinked.graphs.length;
+    if (unlinked.results.length) ul.append(el('li', { class: 'nav-group' }, el('div', { class: 'nav-group-label' }, 'Results'),
+      el('ul', { class: 'nav-list nav-leaves nav-results' }, ...leaves(unlinked.results, 'result', '∑'))));
+    if (unlinked.graphs.length) ul.append(el('li', { class: 'nav-group' }, el('div', { class: 'nav-group-label' }, 'Graphs'),
+      el('ul', { class: 'nav-list nav-leaves nav-graphs' }, ...leaves(unlinked.graphs, 'graph', '◧'))));
   }
 
   // ---------- content dispatch ----------
@@ -1820,6 +1878,7 @@
       results: App.results.map((r) => ({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, graphId: r.graphId })),
       graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec })),
       active: App.active,
+      navigator: { collapsed: Array.from(App.navCollapsed) },
     };
   }
   function restoreSnapshot(s) {
@@ -1836,6 +1895,9 @@
     });
     const ids = App.tables.concat(App.results, App.graphs).map((x) => x.id);
     App.active = s.active && ids.includes(s.active.id) ? s.active : (App.tables[0] ? { view: 'data', id: App.tables[0].id } : null);
+    const navKeys = new Set(App.tables.flatMap((t) => ['data:', 'result:', 'graph:'].map((prefix) => prefix + t.id)));
+    const collapsed = s.navigator && Array.isArray(s.navigator.collapsed) ? s.navigator.collapsed : [];
+    App.navCollapsed = new Set(collapsed.filter((key) => navKeys.has(key)));
   }
   // Read the autosaved session WITHOUT loading it, so startup can offer a choice.
   function peekSavedState() {
@@ -1971,6 +2033,7 @@
     App.tables = App.tables.filter((x) => x.id !== id);
     App.results = App.results.filter((r) => r.tableId !== id);
     App.graphs = App.graphs.filter((g) => g.tableId !== id);
+    ['data:', 'result:', 'graph:'].forEach((prefix) => App.navCollapsed.delete(prefix + id));
     afterDelete();
     toast('Deleted "' + t.name + '"' + (c.results + c.graphs ? ' and related analyses/graphs' : ''));
   }

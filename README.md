@@ -75,6 +75,15 @@ Import Data, Export Figure) with real file dialogs, plus Edit/View/Analyze menus
 
 Then **Load an example**, **Import data**, or **＋ New table** and start typing.
 
+The left sidebar groups each table's **Results** and **Graphs** underneath that
+data table. Click a table's arrow to expand/collapse everything beneath it, or
+collapse just its Results or Graphs group. Counts show how many items are inside.
+Clicking a table's name opens its data without changing its expanded state.
+New analyses and graphs automatically reveal their sidebar entry. Expanded and
+collapsed states are autosaved and included in project files; older projects are
+grouped automatically. Items whose source table is missing remain accessible under
+**Unlinked items**.
+
 Right-click a table, result, or graph in the left sidebar and choose **Rename…**
 to give it a descriptive name. Press **Enter** or click **Rename** to apply it;
 **Escape** or **Cancel** leaves the original name unchanged. Names are autosaved
@@ -177,7 +186,7 @@ Run the checks (requires Node and Python):
 ```bash
 node tests/check.js         # stats tests vs an independent Python oracle
 node tests/prism.check.js   # .prism import mapping (pure Node, no Python)
-npm run test:ui             # sidebar, hypothesis options, and persistence (requires Electron/display)
+npm run test:ui             # nested sidebar, rename, hypothesis options, and persistence (requires Electron/display)
 ```
 
 ## Data formats
