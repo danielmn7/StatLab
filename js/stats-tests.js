@@ -180,6 +180,105 @@ const StatTests = (function (C) {
     };
   }
 
+  // ---------- Brown–Forsythe equal-variance test (median-centered Levene) ----------
+  function brownForsythe(groups) {
+    const result = {
+      test: 'Brown–Forsythe test (equal variances)',
+      k: Array.isArray(groups) ? groups.length : 0,
+      ns: [], medians: [], variances: [], sds: [],
+      W: NaN, df1: NaN, df2: NaN, p: NaN,
+    };
+    const fail = (error) => Object.assign(result, { error });
+    if (!Array.isArray(groups) || groups.length < 2) {
+      return fail('Brown–Forsythe needs at least two groups.');
+    }
+
+    // Keep this stricter policy local: blanks/NaN/nonnumeric cells are missing,
+    // numeric strings are accepted, but infinities must not be silently omitted.
+    // Copy into new arrays so neither cleaning nor median sorting alters inputs.
+    const data = [];
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      const raw = Array.isArray(group) ? group : group && group.values;
+      if (!Array.isArray(raw)) return fail('Each group must be an array or an object with a values array.');
+      const values = [];
+      for (const value of raw) {
+        if (typeof value !== 'number' && typeof value !== 'string') continue;
+        if (typeof value === 'string' && value.trim() === '') continue;
+        const x = Number(value);
+        if (Number.isNaN(x)) continue;
+        if (!Number.isFinite(x)) return fail('Every numeric observation must be finite; Infinity is not supported.');
+        values.push(x);
+      }
+      data.push(values);
+    }
+    const k = result.k, ns = result.ns = data.map((g) => g.length);
+    const N = sum(ns);
+    result.df1 = k - 1;
+    result.df2 = N - k;
+    if (ns.some((n) => n < 2)) return fail('Each group needs at least two finite numeric observations after omitting missing values.');
+
+    const deviations = [];
+    let maxDeviation = 0;
+    for (const values of data) {
+      const sorted = values.slice().sort((a, b) => a - b);
+      const n = values.length, mid = Math.floor(n / 2);
+      const lo = sorted[mid - 1], hi = sorted[mid];
+      // Avoid overflow when two finite middle observations have opposite signs.
+      const median = n % 2 ? hi : (lo < 0 && hi > 0 ? lo / 2 + hi / 2 : lo + (hi - lo) / 2);
+      result.medians.push(median);
+      const centered = values.map((x) => x - median);
+      if (centered.some((x) => !Number.isFinite(x))) return fail('Values exceed the numerical range for this test.');
+      let scale = 0;
+      for (const x of centered) scale = Math.max(scale, Math.abs(x));
+      // Center and rescale before computing the sample SD (ddof=1). This also
+      // avoids summing large offsets and squaring raw large/small observations.
+      const s = scale === 0 ? 0 : sd(centered.map((x) => x / scale)) * scale;
+      result.sds.push(s);
+      result.variances.push(s * s);
+      if (!Number.isFinite(s * s)) return fail('Sample variances exceed the numerical range for this test.');
+
+      // Equal-sized blocks of two endpoints (including every n=2 group) have
+      // identically equal absolute deviations in exact arithmetic. Force that
+      // equality instead of letting rounded decimal midpoints create a false
+      // nonzero denominator and a spurious significant result.
+      let z;
+      if (n % 2 === 0 && sorted[0] === lo && sorted[n - 1] === hi) {
+        const range = hi - lo;
+        const halfRange = Number.isFinite(range) ? range / 2 : hi / 2 - lo / 2;
+        z = new Array(n).fill(halfRange);
+      } else {
+        z = centered.map(Math.abs);
+      }
+      for (const x of z) maxDeviation = Math.max(maxDeviation, x);
+      deviations.push(z);
+    }
+    if (maxDeviation === 0) return fail('No within-group variation in absolute deviations; the Brown–Forsythe statistic is undefined.');
+
+    // NIST median-centered Levene statistic. A common scale cancels in the SS
+    // ratio and protects W against squared-deviation overflow/underflow.
+    // https://www.itl.nist.gov/div898/handbook/eda/section3/eda35a.htm
+    const z = deviations.map((g) => g.map((x) => x / maxDeviation));
+    // The arithmetic mean of a constant array must stay exactly constant:
+    // repeated addition/division can otherwise manufacture tiny residuals.
+    const means = z.map((g) => g.every((x) => x === g[0]) ? g[0] : mean(g));
+    const grand = sum(means.map((m, i) => ns[i] * m)) / N;
+    let ssB = 0, ssW = 0;
+    for (let i = 0; i < k; i++) {
+      ssB += ns[i] * (means[i] - grand) ** 2;
+      for (const x of z[i]) ssW += (x - means[i]) ** 2;
+    }
+    if (!(ssW > 0)) return fail('No within-group variation in absolute deviations; the Brown–Forsythe statistic is undefined.');
+    const W = (N - k) / (k - 1) * (ssB / ssW);
+    const p = C.fDistP(W, result.df1, result.df2); // upper tail; valid W=0 gives p=1
+    if (!Number.isFinite(W) || !Number.isFinite(p) || p < 0 || p > 1) {
+      return fail('The Brown–Forsythe calculation exceeds the numerical range for this test.');
+    }
+    result.W = W;
+    result.p = p;
+    return result;
+  }
+
   // ---------- post-hoc multiple comparisons ----------
   function pairwiseList(k) {
     const pairs = [];
@@ -695,7 +794,7 @@ const StatTests = (function (C) {
   return {
     clean, mean, sd, sem, variance, quantile, describe, rankData, centralMoments,
     oneSampleT, unpairedT, pairedT,
-    oneWayANOVA, posthoc, holmSidak, dunnettP,
+    oneWayANOVA, brownForsythe, posthoc, holmSidak, dunnettP,
     mannWhitney, mannWhitneyCounts, wilcoxonSignedRank,
     kruskalWallis, dunnPosthoc,
     pearson, spearman, linearRegression,

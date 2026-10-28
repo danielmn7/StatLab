@@ -13,7 +13,7 @@ const Guidance = (function () {
         { ico: '⚖️', label: 'Compare groups or conditions', sub: 'Is there a difference between means/medians?', next: 'q_ngroups' },
         { ico: '📈', label: 'Relationship between two variables', sub: 'Do X and Y move together? Fit a line?', next: 'q_relation' },
         { ico: '⏱️', label: 'Survival / time-to-event', sub: 'Compare time until an event happens', next: 'rec_survival' },
-        { ico: '🔍', label: 'Check data quality', sub: 'Test normality or screen for outliers', next: 'q_quality' },
+        { ico: '🔍', label: 'Check data quality', sub: 'Check normality, variances, or outliers', next: 'q_quality' },
       ],
     },
     q_ngroups: {
@@ -45,17 +45,18 @@ const Guidance = (function () {
     },
     q_two_normal: {
       q: 'Are the data in each group roughly normal?',
+      hint: 'Inspect the data plot for strong skew and influential outliers. Welch’s handles unequal variances, not every distributional problem.',
       opts: [
         { ico: '✅', label: 'Yes — both groups', sub: 'Compare means with a t test', next: 'q_two_var' },
-        { ico: '❌', label: 'No / ordinal / small', sub: 'Compare ranks instead', next: 'rec_mannwhitney' },
+        { ico: '❌', label: 'No / ordinal', sub: 'Consider a rank-based comparison (a different question from comparing means)', next: 'rec_mannwhitney' },
       ],
     },
     q_two_var: {
-      q: 'Can you assume equal variances (similar spread)?',
-      hint: "When unsure, Welch's correction is the safer default and is rarely wrong.",
+      q: 'Is there an independent justification for equal population variances?',
+      hint: 'Both Welch’s and Student’s are unpaired t tests. Welch’s is the recommended default. Do not use a nonsignificant variance test as proof of equal variances or as an automatic test-selection rule.',
       opts: [
-        { ico: '🟰', label: 'Yes, similar spread', sub: "Student's pooled t test", next: 'rec_student_t' },
-        { ico: '↕️', label: 'No / not sure', sub: "Welch's unequal-variance t test", next: 'rec_welch_t' },
+        { ico: '↕️', label: 'No / unsure — use Welch’s', sub: 'Does not require equal variances; especially important with unequal group sizes', next: 'rec_welch_t' },
+        { ico: '🟰', label: 'Yes — justified independently', sub: 'Student’s pooled t test; not justified by p ≥ 0.05 on a variance check alone', next: 'rec_student_t' },
       ],
     },
     q_two_paired_normal: {
@@ -98,6 +99,7 @@ const Guidance = (function () {
       q: 'What do you want to check?',
       opts: [
         { ico: '🔔', label: 'Is my data normal?', sub: 'Normality tests', next: 'rec_normality' },
+        { ico: '↕️', label: 'Do group variances differ?', sub: 'Brown–Forsythe variance diagnostic (median-centered Levene)', next: 'rec_variance' },
         { ico: '🎯', label: 'Are there outliers?', sub: "Grubbs' test", next: 'rec_grubbs' },
       ],
     },
@@ -105,8 +107,8 @@ const Guidance = (function () {
     // ----- recommendations -----
     rec_onesample_t: rec('One-sample t test', 'onesample-t', {}, 'Compares the mean of one sample to a hypothetical value you specify.'),
     rec_wilcoxon_one: rec('Wilcoxon signed-rank (one sample)', 'wilcoxon', { oneSample: true }, 'Rank-based alternative to the one-sample t test; tests whether the median differs from a value.'),
-    rec_student_t: rec("Unpaired t test (Student's)", 'unpaired-t', { welch: false }, 'Compares the means of two independent groups assuming equal variances.'),
-    rec_welch_t: rec("Welch's unpaired t test", 'unpaired-t', { welch: true }, 'Compares two independent means without assuming equal variances — the robust default.'),
+    rec_student_t: rec("Unpaired t test (Student's)", 'unpaired-t', { welch: false }, 'Compares two independent means using a pooled variance. Use only when equal population variances are justified independently, preferably in a prespecified analysis plan.'),
+    rec_welch_t: rec("Welch's unpaired t test", 'unpaired-t', { welch: true }, 'Compares two independent means without assuming equal variances — the recommended default, even if a variance diagnostic is nonsignificant.'),
     rec_mannwhitney: rec('Mann-Whitney U test', 'mannwhitney', {}, 'Rank-based comparison of two independent groups; no normality assumption.'),
     rec_paired_t: rec('Paired t test', 'paired-t', {}, 'Compares two matched measurements by analyzing their differences.'),
     rec_wilcoxon_paired: rec('Wilcoxon matched-pairs signed rank test', 'wilcoxon', {}, 'Rank-based alternative to the paired t test.'),
@@ -117,6 +119,7 @@ const Guidance = (function () {
     rec_spearman: rec('Spearman correlation', 'spearman', {}, 'Measures monotonic association using ranks (ρ); robust to outliers and non-linearity.'),
     rec_regression: rec('Simple linear regression', 'regression', {}, 'Fits Y = slope·X + intercept; gives slope, R², and confidence bands.'),
     rec_normality: rec('Normality tests', 'normality', {}, "Shapiro-Wilk, D'Agostino-Pearson and Anderson-Darling assess whether data could come from a normal distribution."),
+    rec_variance: rec('Brown–Forsythe variance test', 'variance', {}, 'Checks for differences in spread across two or more independent groups. This diagnostic does not automatically select or change your mean-comparison test.'),
     rec_grubbs: rec("Grubbs' outlier test", 'grubbs', {}, 'Detects a single outlier (or, iteratively, several) in roughly normal data.'),
     rec_survival: rec('Kaplan-Meier survival analysis', 'survival', {}, 'Estimates survival curves and compares them with the log-rank test.'),
     rec_twoway: rec('Two-way ANOVA', 'twoway', {}, 'Tests two factors at once (e.g. genotype and time) plus their interaction, using a Grouped data table.'),
@@ -125,6 +128,32 @@ const Guidance = (function () {
   function rec(title, kind, params, why) {
     return { rec: true, title, why, analysis: Object.assign({ kind }, params), guidance: kind };
   }
+
+  const REFERENCES = {
+    delacre2017: {
+      label: 'Delacre, Lakens & Leys (2017). Why Psychologists Should by Default Use Welch’s t-test Instead of Student’s t-test. International Review of Social Psychology, 30, 92–101.',
+      url: 'https://doi.org/10.5334/irsp.82',
+    },
+    delacre2022: {
+      label: 'Delacre, Lakens & Leys (2022). Correction to the 2017 article. Retains the Welch recommendation but limits conclusions for highly skewed distributions with unequal sample sizes.',
+      url: 'https://doi.org/10.5334/irsp.661',
+    },
+    brownForsythe1974: {
+      label: 'Brown & Forsythe (1974). Robust Tests for the Equality of Variances. Journal of the American Statistical Association, 69, 364–367.',
+      url: 'https://doi.org/10.1080/01621459.1974.10482955',
+    },
+    nistLevene: {
+      label: 'NIST/SEMATECH e-Handbook, §1.3.5.10. Levene Test for Equality of Variances. Formula and recommendation for median centering.',
+      url: 'https://www.itl.nist.gov/div898/handbook/eda/section3/eda35a.htm',
+    },
+  };
+  const VARIANCE_GUIDANCE = {
+    default: 'Welch’s is the recommended default for comparing two independent means. It does not require equal population variances and generally loses little power when variances are equal; unequal sample sizes make the pooled test more vulnerable to unequal variances.',
+    student: 'Student’s unpaired t test pools the variances. Use it only with an independently justified equal-variance model, preferably specified before examining the data.',
+    pretest: 'Do not choose between the t tests using the variance-test p-value alone. A nonsignificant result does not establish equal variances, especially with small samples. This diagnostic never changes your selected test.',
+    limits: 'Both t tests require independent observations. Inspect plots for severe skew and influential outliers, especially with small or unequal sample sizes; Welch’s is not a cure for these issues. Use a paired analysis for matched observations.',
+    references: ['delacre2017', 'delacre2022', 'brownForsythe1974', 'nistLevene'],
+  };
 
   // Per-test reference guidance shown in results and the analyze dialog.
   const TESTS = {
@@ -140,7 +169,14 @@ const Guidance = (function () {
       use: 'Compare the means of two independent groups.',
       assumptions: ['Two independent groups', 'Each group approximately normal', "Equal variances (Student's) — Welch's drops this"],
       interpret: 'A small p-value indicates the two group means differ more than expected by chance. Report the difference and its 95% CI, not just p.',
-      alt: 'Not normal? Use Mann-Whitney. Matched data? Use the paired t test.',
+      alt: 'Matched data? Use the paired t test. Strong skew or outliers? Consider a justified transformation or robust method; Mann-Whitney compares ranks/distributions, not necessarily means.',
+    },
+    'variance': {
+      name: 'Brown–Forsythe variance test (median-centered Levene)',
+      use: 'Assess differences in spread across two or more independent groups. It is a diagnostic, not a prerequisite for Welch’s t test.',
+      assumptions: ['Independent observations within and between groups', 'At least two numeric observations per group', 'Similar distribution shapes for a pure variance interpretation; the F reference is approximate'],
+      interpret: 'H₀: population variances are equal. A small p-value is evidence of different spreads; p ≥ 0.05 is insufficient evidence of a difference, not proof of equality. With 3+ groups this is an omnibus test, not a pairwise comparison.',
+      alt: 'Prefer Welch’s for two independent means when variances are uncertain. Do not automatically switch to Student’s after a nonsignificant variance test. This is not the Brown–Forsythe test of means.',
     },
     'paired-t': {
       name: 'Paired t test',
@@ -242,7 +278,7 @@ const Guidance = (function () {
     },
   };
 
-  return { NODES, TESTS, START: 'q_goal' };
+  return { NODES, TESTS, REFERENCES, VARIANCE_GUIDANCE, START: 'q_goal' };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Guidance;

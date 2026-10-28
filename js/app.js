@@ -32,6 +32,7 @@
     if (p > 0.9999) return '> 0.9999';
     return p.toFixed(4);
   }
+  function reportP(p) { const text = fmtP(p); return 'p ' + (/^[<>]/.test(text) ? text : '= ' + text); }
   function stars(p) { return p < 0.0001 ? '****' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : 'ns'; }
   function toast(msg) {
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
@@ -78,6 +79,13 @@
     LINKED_VISUAL_OPTIONS.forEach((key) => { if (oldOpts[key] !== undefined) nextOpts[key] = oldOpts[key]; });
     graph.spec = Object.assign({}, fresh, { chartType: compatibleChartType(old.chartType, fresh.chartType), opts: nextOpts });
   }
+  function linkedGraphFor(result) { return App.graphs.find((g) => g.id === result.graphId || g.resultId === result.id); }
+  function invalidateLinkedGraph(result, message) {
+    const graph = linkedGraphFor(result);
+    if (graph) graph.spec = Object.assign({}, graph.spec, {
+      unavailable: message, opts: Object.assign({}, graph.spec.opts, { sig: [] }),
+    });
+  }
   function refreshLinkedGraphs(table) {
     const tableResults = App.results.filter((r) => r.tableId === table.id);
     const resultGraphIds = new Set();
@@ -86,15 +94,17 @@
       try { computed = compute(table, result.spec); }
       catch (err) {
         result.html = el('div', { class: 'note' }, 'Could not recompute this result after the data changed: ' + err.message);
+        invalidateLinkedGraph(result, 'Linked analysis unavailable: ' + err.message);
         return;
       }
       result.html = computed.html;
-      if (result.graphId && computed.graphSpec) {
-        const graph = App.graphs.find((g) => g.id === result.graphId);
+      if (computed.error) invalidateLinkedGraph(result, computed.error);
+      else if (computed.graphSpec) {
+        const graph = linkedGraphFor(result);
         if (graph) { mergeLinkedGraphSpec(graph, computed.graphSpec); resultGraphIds.add(graph.id); }
       }
     });
-    App.graphs.filter((g) => g.tableId === table.id && !resultGraphIds.has(g.id) && !tableResults.some((r) => r.graphId === g.id)).forEach((graph) => {
+    App.graphs.filter((g) => g.tableId === table.id && !resultGraphIds.has(g.id) && !tableResults.some((r) => r.graphId === g.id || r.id === g.resultId)).forEach((graph) => {
       try { mergeLinkedGraphSpec(graph, makeQuickGraphSpec(table)); }
       catch (err) { /* keep the last valid graph while the source is temporarily invalid */ }
     });
@@ -527,6 +537,7 @@
       list.push({ kind: 'onesample-t', name: 'One-sample t test', desc: 'Compare mean to a value', tag: 'Parametric', rec: true });
       list.push({ kind: 'wilcoxon', name: 'Wilcoxon signed-rank', desc: 'Non-parametric one sample', tag: 'Rank-based' });
     }
+    if (ng >= 2) list.push({ kind: 'variance', name: 'Variance test', desc: 'Brown–Forsythe (median-centered Levene)', tag: 'Diagnostics' });
     list.push({ kind: 'normality', name: 'Normality tests', desc: 'Shapiro-Wilk, D’Agostino, A-D', tag: 'Diagnostics' });
     list.push({ kind: 'grubbs', name: "Grubbs' outlier test", desc: 'Detect extreme values', tag: 'Diagnostics' });
     list.push({ kind: 'descriptive', name: 'Descriptive statistics', desc: 'Mean, SD, SEM, median, CI…', tag: 'Summary' });
@@ -542,7 +553,7 @@
     const grid = el('div', { class: 'test-grid' });
     tests.forEach((t) => {
       const card = el('div', {
-        class: 'test-opt' + (analyzeState.kind === t.kind ? ' selected' : ''),
+        class: 'test-opt' + (analyzeState.kind === t.kind ? ' selected' : ''), 'data-kind': t.kind,
         onclick: () => { analyzeState.kind = t.kind; analyzeState.params = {}; $$('.test-opt', grid).forEach((c) => c.classList.remove('selected')); card.classList.add('selected'); renderAnalyzeOpts(); },
       },
         el('div', { class: 't-name' }, t.name, t.rec ? el('span', { style: 'color:var(--accent);font-size:11px;font-weight:700' }, '  ★ suggested') : ''),
@@ -566,8 +577,15 @@
           ...options.map((o) => el('option', { value: o.v, selected: p[key] === o.v }, o.t))));
     };
     if (kind === 'unpaired-t') {
-      box.append(sel('Variance assumption', 'welch', [{ v: 'welch', t: "Welch's correction (recommended — unequal variances)" }, { v: 'student', t: "Student's (assume equal variances)" }], 'welch'));
+      const picker = sel('Unpaired t test', 'welch', [{ v: 'welch', t: 'Welch’s (recommended — no equal-variance assumption)' }, { v: 'student', t: 'Student’s (pooled — assumes equal variances)' }], 'welch');
+      const select = $('select', picker);
+      select.id = 'unpaired-variance';
+      $('label', picker).htmlFor = select.id;
+      const assessment = varianceAssessment(table.groups(), { selected: p.welch });
+      select.addEventListener('change', () => updateVarianceChoice(assessment, p.welch));
+      box.append(picker, assessment);
     }
+    if (kind === 'variance') box.append(varianceAssessment(table.groups()));
     if (kind === 'onesample-t') {
       p.mu0 = p.mu0 || '0';
       box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Hypothetical mean (H₀)'),
@@ -700,7 +718,7 @@
     const pPhrase = /^[<>]/.test(ps) ? 'p ' + ps : 'p = ' + ps;
     return el('div', { class: 'verdict ' + (sig ? 'sig' : 'ns') },
       el('span', { class: 'vicon' }, sig ? '✓' : '○'),
-      el('span', { html: (sig ? sigText : nsText) + ` <b>(${pPhrase}${sig ? ', ' + stars(p) : ''})</b>` }));
+      el('span', {}, sig ? sigText : nsText, ' ', el('b', {}, `(${pPhrase}${sig ? ', ' + stars(p) : ''})`)));
   }
   function statRow(k, v) { return el('tr', {}, el('th', {}, k), el('td', { class: 'num' }, v)); }
   function statsTable(rows) { return el('table', { class: 'stats' }, el('tbody', {}, ...rows.map(([k, v]) => statRow(k, v)))); }
@@ -709,6 +727,65 @@
     return el('div', { class: 'result-card' },
       el('div', { class: 'result-head' }, el('h3', {}, title)),
       el('div', { class: 'result-body' }, ...body));
+  }
+
+  function varianceReferences(twoGroups) {
+    const help = el('details', { class: 'help variance-references' },
+      el('summary', {}, twoGroups ? 'Choosing Welch’s vs Student’s · published guidance' : 'Variance-test method & published sources'));
+    const body = el('div', { class: 'help-body' });
+    if (twoGroups) {
+      ['default', 'student', 'pretest', 'limits'].forEach((key) => body.append(el('p', {}, G.VARIANCE_GUIDANCE[key])));
+    }
+    const ids = twoGroups ? G.VARIANCE_GUIDANCE.references : ['brownForsythe1974', 'nistLevene'];
+    body.append(el('ol', { class: 'reference-list' }, ...ids.map((id) => {
+      const ref = G.REFERENCES[id];
+      return el('li', {}, el('a', { href: ref.url, target: '_blank', rel: 'noopener noreferrer' }, ref.label));
+    })));
+    help.append(body);
+    return help;
+  }
+  function updateVarianceChoice(panel, selected) {
+    const warning = $('.variance-choice', panel);
+    if (warning) {
+      warning.hidden = selected !== 'student';
+      warning.textContent = panel.dataset.status === 'unequal'
+        ? 'Student’s is selected, but this diagnostic finds evidence of unequal variances. Welch’s is recommended. Your selection has not been changed.'
+        : 'Student’s is selected. A nonsignificant or unavailable variance check does not justify pooling variances; use an independently justified equal-variance model. Your selection has not been changed.';
+    }
+  }
+  function varianceAssessment(groups, { selected, report = false } = {}) {
+    const r = T.brownForsythe(groups);
+    const twoGroups = groups.length === 2;
+    const status = r.error ? 'unavailable' : r.p < 0.05 ? 'unequal' : 'inconclusive';
+    const panel = el('section', { class: 'variance-check', 'aria-label': 'Variance diagnostic', 'data-status': status },
+      el('h4', {}, 'Variance check · Brown–Forsythe'),
+      el('div', { class: 'note' }, 'Median-centered Levene’s test · H₀: equal population variances · α = 0.05'));
+    const summary = el('table', { class: 'stats variance-summary' },
+      el('thead', {}, el('tr', {}, ...['Group', 'n', 'SD', 'Sample variance'].map((label) => el('th', {}, label)))));
+    summary.append(el('tbody', {}, ...groups.map((group, i) => el('tr', {},
+      el('td', {}, group.name), el('td', { class: 'num' }, r.ns[i]),
+      el('td', { class: 'num' }, num(r.sds[i])), el('td', { class: 'num' }, num(r.variances[i]))))));
+    panel.append(el('div', { class: 'variance-table-wrap' }, summary));
+    if (r.error) {
+      panel.append(el('p', { class: 'variance-status unavailable', role: 'status' }, 'Variance check unavailable: ' + r.error));
+    } else {
+      panel.dataset.p = r.p;
+      panel.append(el('p', { class: 'variance-stat' }, `W(${r.df1}, ${r.df2}) = ${num(r.W, 4)}; variance-test ${reportP(r.p)} (approximate F reference).`),
+        el('p', { class: 'variance-status ' + status, role: 'status' }, status === 'unequal'
+          ? 'Evidence of different population spreads. Do not assume equal variances.'
+          : 'No clear evidence of different spreads. This does not establish equal variances.'));
+    }
+    panel.append(el('p', { class: 'note' }, 'This spread diagnostic has an approximate p-value and can have low power in small samples. Different distribution shapes can affect its interpretation; inspect the data plot.'));
+    if (twoGroups) {
+      panel.append(el('p', { class: 'variance-advice' }, el('b', {}, 'Which t test? '), 'Both are unpaired tests. Prefer Welch’s unless equal population variances are justified independently—not just by a nonsignificant variance test.'),
+        el('p', { class: 'variance-choice', hidden: true, role: 'status' }));
+      if (selected) updateVarianceChoice(panel, selected);
+    } else if (groups.length > 2) {
+      panel.append(el('p', { class: 'variance-advice' }, 'This is an omnibus spread diagnostic, not a test of means or a pairwise comparison. For 3+ independent means with uncertain variances, consider Welch’s ANOVA.'));
+    }
+    if (report && !r.error) panel.append(apaLine(`The Brown–Forsythe test for equality of variances (median-centered Levene) gave W(${r.df1}, ${r.df2}) = ${num(r.W, 3)}, ${reportP(r.p)} (approximate F reference). ${status === 'unequal' ? 'There was evidence of different population spreads.' : 'There was insufficient evidence of different population spreads; this does not establish equal variances.'}`));
+    panel.append(varianceReferences(twoGroups));
+    return panel;
   }
 
   // Reduce a grouped (two-way) table to named value-sets for column-style
@@ -777,7 +854,13 @@
     }
 
     if (kind === 'unpaired-t') {
+      const unavailable = (message) => Object.assign(wrap('Unpaired t test unavailable', card('Unpaired t test unavailable',
+        el('div', { class: 'verdict warn unpaired-unavailable', role: 'status' }, message),
+        el('div', { class: 'note' }, 'Selected method: ' + (spec.welch ? 'Welch’s' : 'Student’s pooled') + '. No mean-test p-value or significance annotation is available.'),
+        varianceAssessment(groups, { selected: spec.welch ? 'welch' : 'student' }))), { error: message });
+      if (groups.length !== 2 || groups.some((g) => g.values.length < 2 || g.values.some((v) => !Number.isFinite(v)))) return unavailable('Mean comparison unavailable: an unpaired t test requires exactly two groups with at least two finite numeric observations each.');
       const [a, b] = groups; const r = T.unpairedT(a.values, b.values, spec.welch);
+      if (![r.t, r.df, r.p, r.se, r.ci95lo, r.ci95hi].every(Number.isFinite) || r.df <= 0 || r.se <= 0 || r.p < 0 || r.p > 1) return unavailable('Mean comparison unavailable: the standard error, degrees of freedom, or t-test inference is undefined. Both groups may have zero spread, or the values may exceed the numerical range.');
       const sg = [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }];
       const node = card(r.test + ` — ${a.name} vs ${b.name}`,
         verdict(r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
@@ -785,11 +868,17 @@
           [a.name + ' (mean ± SD)', `${num(r.mean1)} ± ${num(r.sd1)}  (n=${r.n1})`],
           [b.name + ' (mean ± SD)', `${num(r.mean2)} ± ${num(r.sd2)}  (n=${r.n2})`],
           ['Difference (95% CI)', `${num(r.diff)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`],
-          ['t', num(r.t, 4)], ['df', num(r.df, r.welch ? 2 : 0)], ['P value', fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)],
+          ['t', num(r.t, 4)], ['df', num(r.df, r.welch ? 2 : 0)], ['P value (means, two-tailed)', fmtP(r.p)], ["Cohen's d", num(r.cohenD, 3)],
         ]),
-        apaLine(`${a.name} (M = ${num(r.mean1, 3)}, SD = ${num(r.sd1, 3)}) vs ${b.name} (M = ${num(r.mean2, 3)}, SD = ${num(r.sd2, 3)}); ${r.welch ? "Welch's " : ''}t(${num(r.df, 2)}) = ${num(r.t, 3)}, p ${r.p < 0.0001 ? '< .0001' : '= ' + fmtP(r.p)}, d = ${num(r.cohenD, 2)}.`),
+        apaLine(`${a.name} (M = ${num(r.mean1, 3)}, SD = ${num(r.sd1, 3)}) vs ${b.name} (M = ${num(r.mean2, 3)}, SD = ${num(r.sd2, 3)}); ${r.welch ? 'Welch’s' : 'Student’s pooled'} t(${num(r.df, 2)}) = ${num(r.t, 3)}, ${reportP(r.p)}, d = ${num(r.cohenD, 2)}.`),
+        varianceAssessment(groups, { selected: r.welch ? 'welch' : 'student', report: true }),
         assumptionNote(a.values, b.values));
       return wrap(`t test: ${a.name} vs ${b.name}`, node, graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sg }));
+    }
+
+    if (kind === 'variance') {
+      if (table.type !== 'column') throw new Error('The variance diagnostic requires a Column table with independent groups.');
+      return wrap('Brown–Forsythe variance test', card('Brown–Forsythe variance test', varianceAssessment(groups, { report: true })));
     }
 
     if (kind === 'paired-t') {
@@ -1178,6 +1267,7 @@
   }
 
   function buildSVG(spec) {
+    if (spec.unavailable) return '<svg viewBox="0 0 400 60"><text x="10" y="35">Linked analysis unavailable — check the source data.</text></svg>';
     const o = spec.opts || {};
     if (spec.chartType === 'bar') return Charts.barChart(spec.groups, Object.assign({ showPoints: o.showPoints }, o));
     if (spec.chartType === 'dot') return Charts.dotPlot(spec.groups, o);
@@ -1221,11 +1311,15 @@
       el('div', { class: 'view-actions' },
         srcTable ? el('button', { class: 'btn btn-accent', onclick: () => openAnalyze(srcTable) }, '∑ Analyze') : null,
         srcTable ? el('button', { class: 'btn', onclick: () => setActive('data', srcTable.id) }, '▦ Data') : null,
-        el('button', { class: 'btn', onclick: () => exportSVG(graph) }, '⭳ SVG'),
-        el('button', { class: 'btn', onclick: () => exportPNG(graph) }, '⭳ PNG'),
+        el('button', { class: 'btn', disabled: !!graph.spec.unavailable, onclick: () => exportSVG(graph) }, '⭳ SVG'),
+        el('button', { class: 'btn', disabled: !!graph.spec.unavailable, onclick: () => exportPNG(graph) }, '⭳ PNG'),
         el('button', { class: 'btn btn-ghost', onclick: () => deleteGraph(graph.id) }, '🗑 Delete')));
     root.append(head);
 
+    if (graph.spec.unavailable) {
+      root.append(el('div', { class: 'verdict warn graph-unavailable', role: 'status' }, 'Graph unavailable. ' + graph.spec.unavailable + ' Correct the source data to recompute this analysis and graph.'));
+      return;
+    }
     const wrap = el('div', { class: 'graph-wrap' });
     const canvas = el('div', { class: 'graph-canvas', id: 'graph-canvas' });
     canvas.innerHTML = buildSVG(graph.spec);
@@ -1611,8 +1705,8 @@
     canvas.addEventListener('mousedown', hide);   // don't cover the chart while dragging to reorder
   }
 
-  function exportSVG(graph) { download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
-  function exportPNG(graph) { Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }
+  function exportSVG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
+  function exportPNG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }
 
   function makeQuickGraphSpec(table) {
     if (table.type === 'survival') {
@@ -1710,6 +1804,14 @@
   // ---------- guide modal ----------
   let guideStack = [];
   function openGuide() { guideStack = [G.START]; renderGuide(); showModal('modal-guide'); }
+  function guideSourceTable(kind) {
+    const type = kind === 'survival' ? 'survival' : kind === 'twoway' ? 'grouped' : ['pearson', 'spearman', 'regression'].includes(kind) ? 'xy' : 'column';
+    const matches = (table) => table && table.type === type && table.hasData() &&
+      (kind !== 'unpaired-t' || table.groups().length === 2) && (kind !== 'variance' || table.groups().length >= 2);
+    const active = activeObj();
+    const preferred = App.active && App.active.view === 'data' ? active : active && tableById(active.tableId);
+    return matches(preferred) ? preferred : App.tables.find(matches);
+  }
   function renderGuide() {
     const body = $('#guide-body'); body.innerHTML = '';
     const node = G.NODES[guideStack[guideStack.length - 1]];
@@ -1722,6 +1824,11 @@
       el('span', { class: 'g-ico' }, o.ico),
       el('div', {}, el('div', { class: 'g-main' }, o.label), el('div', { class: 'g-sub' }, o.sub)))));
     body.append(opts);
+    if (guideStack[guideStack.length - 1] === 'q_two_var') {
+      const tbl = guideSourceTable('unpaired-t');
+      if (tbl) body.append(el('button', { class: 'btn btn-sm', style: 'margin-top:14px', onclick: () => { hideModal('modal-guide'); openAnalyze(tbl, 'variance'); } }, '↕ Inspect variances on "' + tbl.name + '" (diagnostic only)'));
+      body.append(varianceReferences(true));
+    }
     // offer quick normality check when relevant
     if (/normal/i.test(node.q)) {
       const tbl = App.tables.find((t) => (t.type === 'column' || t.type === 'grouped') && t.hasData());
@@ -1739,9 +1846,10 @@
       box.append(el('div', { style: 'margin-top:6px' }, el('b', {}, 'How to read it: '), g.interpret));
     }
     body.append(box);
+    if (node.analysis.kind === 'unpaired-t' || node.analysis.kind === 'variance') body.append(varianceReferences(node.analysis.kind === 'unpaired-t'));
     // run button if there's a matching table
     const matchType = node.analysis.kind === 'survival' ? 'survival' : node.analysis.kind === 'twoway' ? 'grouped' : ['pearson', 'spearman', 'regression'].includes(node.analysis.kind) ? 'xy' : 'column';
-    const tbl = App.tables.find((t) => t.type === matchType && t.hasData());
+    const tbl = guideSourceTable(node.analysis.kind);
     const actions = el('div', { style: 'margin-top:16px;display:flex;gap:9px;flex-wrap:wrap' });
     if (tbl) actions.append(el('button', { class: 'btn btn-accent', onclick: () => { hideModal('modal-guide'); runAnalysis(tbl, node.analysis); } }, '▶ Run on "' + tbl.name + '"'));
     else actions.append(el('div', { class: 'note' }, `Create a ${matchType === 'xy' ? 'XY' : matchType} data table, then run ${node.title}.`));
@@ -1774,8 +1882,23 @@
     (s.results || []).forEach((r) => {
       const table = tableById(r.tableId);
       let html;
-      try { html = table && r.spec ? compute(table, r.spec).html : el('div', { class: 'note' }, '(source table missing)'); }
-      catch (e) { html = el('div', { class: 'note' }, 'Could not recompute this result.'); }
+      try {
+        if (table && r.spec) {
+          const computed = compute(table, r.spec);
+          html = computed.html;
+          if (computed.error) invalidateLinkedGraph(r, computed.error);
+          else {
+            const graph = linkedGraphFor(r);
+            if (graph && graph.spec.unavailable && computed.graphSpec) mergeLinkedGraphSpec(graph, computed.graphSpec);
+          }
+        } else {
+          html = el('div', { class: 'note' }, '(source table missing)');
+          invalidateLinkedGraph(r, 'The source table or analysis specification is missing.');
+        }
+      } catch (e) {
+        html = el('div', { class: 'note' }, 'Could not recompute this result: ' + e.message);
+        invalidateLinkedGraph(r, 'Linked analysis unavailable: ' + e.message);
+      }
       App.results.push({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, html, graphId: r.graphId });
     });
     const ids = App.tables.concat(App.results, App.graphs).map((x) => x.id);
@@ -2058,8 +2181,8 @@
         return tableSpecs.length;
       } catch (e) { return -1; }
     },
-    hasActiveGraph: () => !!(App.active && App.active.view === 'graph'),
-    activeGraphSVG: () => { const g = activeObj(); return (App.active && App.active.view === 'graph' && g) ? buildSVG(g.spec) : null; },
+    hasActiveGraph: () => { const g = activeObj(); return !!(App.active && App.active.view === 'graph' && g && !g.spec.unavailable); },
+    activeGraphSVG: () => { const g = activeObj(); return (App.active && App.active.view === 'graph' && g && !g.spec.unavailable) ? buildSVG(g.spec) : null; },
     activeGraphName: () => { const g = activeObj(); return g ? (g.name || 'figure') : 'figure'; },
   };
   window.__inElectron = /Electron/.test(navigator.userAgent);

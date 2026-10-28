@@ -108,6 +108,9 @@ The grid behaves like a spreadsheet:
   with confidence bands.
 - **Normality** — **Shapiro-Wilk** (Royston), **D'Agostino-Pearson** omnibus K²,
   and **Anderson-Darling**. Parametric tests auto-flag a normality check.
+- **Variance diagnostic** — **Brown–Forsythe** (median-centered Levene) for two
+  or more independent groups in Column tables. Reports each group's n, SD,
+  sample variance, W statistic, degrees of freedom, and approximate p-value.
 - **Outliers** — **Grubbs'** test (single and iterative/ESD).
 - **Survival** — **Kaplan-Meier** curves, **log-rank (Mantel-Cox)** and
   **Gehan-Breslow-Wilcoxon** tests, median survival and hazard ratio.
@@ -116,8 +119,46 @@ The grid behaves like a spreadsheet:
 - A **"Which test should I use?"** decision tree walks you from your question to the
   right test, explains the assumptions, and runs it on your data with one click.
 - Every analysis dialog has inline "when to use this & how to read it" guidance.
+- Unpaired t tests show a live variance diagnostic in **Analyze** and include it
+  in the saved results. **Analyze → Variance test** runs it separately without
+  creating a graph. Both the diagnostic and the t-test choice survive project
+  reopening and recompute when the source data change.
 - Results include plain-language verdicts, a ready-to-paste report sentence, and
   automatic assumption checks.
+
+#### Welch’s or Student’s unpaired t test?
+
+Both compare **two independent means**. **Welch’s is the recommended default**:
+it does not require equal population variances and generally loses little power
+when they are equal. Unequal group sizes make Student’s pooled test particularly
+vulnerable when variances differ. Student’s remains available when an
+equal-variance model is independently justified, preferably in a prespecified
+analysis plan.
+
+Do **not** use a variance-test p-value as an automatic switch. A small p-value
+is evidence of different spreads; **p ≥ 0.05 does not establish equal variances**,
+especially with small samples. StatLab never changes your selected t test based
+on this diagnostic. Its F reference is approximate; insufficient data or
+degenerate absolute deviations are reported as unavailable, not as evidence of
+equal variances. This is the Brown–Forsythe **variance test**, not a test of means.
+
+Undefined t-test inference is reported as **unavailable**, never as
+"nonsignificant." Invalid source edits also suppress linked graph significance
+and export until valid data return, including after saving and reopening.
+
+Welch’s does not solve dependence, severe skew, or influential outliers. Inspect
+the data plot, especially with small or unequal sample sizes; use a paired
+analysis for matched observations. Different distribution shapes can also
+affect the interpretation of a variance diagnostic.
+
+Published guidance (also linked inside the app):
+- [Delacre, Lakens & Leys (2017), *Why Psychologists Should by Default Use Welch’s
+  t-test Instead of Student’s t-test*](https://doi.org/10.5334/irsp.82), with its
+  [2022 correction](https://doi.org/10.5334/irsp.661), which retains the default
+  recommendation while limiting conclusions for highly skewed, unequal-size samples.
+- [Brown & Forsythe (1974), *Robust Tests for the Equality of Variances*](https://doi.org/10.1080/01621459.1974.10482955).
+- [NIST/SEMATECH e-Handbook §1.3.5.10, *Levene Test for Equality of Variances*](https://www.itl.nist.gov/div898/handbook/eda/section3/eda35a.htm),
+  which recommends median centering for robustness to non-normal data.
 
 ### Figures
 Bar charts with error bars (SD / SEM / 95% CI), column scatter (dot) plots, box-
