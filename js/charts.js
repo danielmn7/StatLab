@@ -107,6 +107,127 @@ const Charts = (function () {
     return false;
   }
 
+  // ---- collision-free point placement (column scatters) ----
+  // Bar-with-points, dot plots and box-plot outliers spread replicates sideways.
+  // Random jitter alone lets near-equal values land on the same spot and bury one
+  // another, so points are laid out like a beeswarm: each keeps its seeded jitter
+  // offset when that spot is clear, otherwise it slides sideways just far enough
+  // to clear its neighbours. y is never moved — it encodes the value.
+  // Horizontal footprint of each symbol relative to a radius-r circle, so wider
+  // shapes (diamond tips, cross arms) keep the same visual gap as circles.
+  const MARKER_EXTENT = { circle: 1, square: 1.12, triangle: 1.12, diamond: 1.4, cross: 1.3 };
+  const SWARM_GAP = 0.8;   // clear space (px) kept between neighbouring markers
+  function markerRadius(r, shape, strokeWidth) { return r * (MARKER_EXTENT[shape] || 1) + (strokeWidth || 0) / 2; }
+  // Clear x in [-W, W] nearest `target`, given forbidden open intervals `blocks`
+  // ([a, b] pairs). Returns null when the whole band is covered.
+  function clearSpot(blocks, target, W) {
+    if (!blocks.length) return target;
+    blocks.sort((p, q) => p[0] - q[0]);
+    const eps = 1e-6;
+    let a = blocks[0][0], b = blocks[0][1];
+    for (let k = 1; k <= blocks.length; k++) {
+      if (k < blocks.length && blocks[k][0] < b) { b = Math.max(b, blocks[k][1]); continue; }
+      if (target > a && target < b) {                      // target is covered: nearest clear spots are this run's ends
+        const okA = a >= -W - eps, okB = b <= W + eps;
+        if (okA && okB) return (target - a <= b - target) ? a : b;
+        return okA ? a : okB ? b : null;
+      }
+      if (k < blocks.length) { a = blocks[k][0]; b = blocks[k][1]; }
+    }
+    return target;
+  }
+  // One placement pass over points sorted by y (`order`). pts[i] = { y, pref, r }:
+  // pixel y, preferred x offset, and collision radius. Clearances scale by `s`.
+  // toCenter packs points toward the column centre instead of their jitter
+  // offsets. Returns { xs, clean }; when a point finds no clear spot the pass
+  // aborts (clean:false) unless `force`, which puts it in the least-crowded spot.
+  function swarmPass(pts, order, W, s, toCenter, force) {
+    const xs = new Array(pts.length).fill(0);
+    const placed = [];
+    let rMax = 0; pts.forEach((p) => { if (p.r > rMax) rMax = p.r; });
+    const reach = (2 * rMax + SWARM_GAP) * s;
+    let lo = 0, clean = true;
+    for (const i of order) {
+      const p = pts[i];
+      const target = toCenter ? p.pref * 1e-3 : Math.max(-W, Math.min(W, p.pref)); // tiny bias keeps each point on its jitter side
+      if (!isFinite(p.y)) { xs[i] = target; continue; }   // not drawable (e.g. ≤ 0 on a log axis)
+      while (lo < placed.length && pts[placed[lo]].y < p.y - reach) lo++;
+      const blocks = [];
+      for (let k = lo; k < placed.length; k++) {
+        const j = placed[k], d = (p.r + pts[j].r + SWARM_GAP) * s, dy = p.y - pts[j].y;
+        if (dy < d) { const w = Math.sqrt(d * d - dy * dy); blocks.push([xs[j] - w, xs[j] + w]); }
+      }
+      let x = clearSpot(blocks, target, W);
+      if (x == null) {
+        clean = false;
+        if (!force) return { xs, clean };
+        // Too dense to keep every marker clear: take the grid spot overlapped by the
+        // fewest neighbours (nearest the target on ties), so the pile spreads evenly.
+        const steps = Math.min(60, Math.max(2, Math.ceil(2 * W / Math.max(1, p.r))));
+        const step = (2 * W) / steps, cover = new Array(steps + 2).fill(0);
+        if (step > 0) blocks.forEach(([a, b]) => {
+          const g0 = Math.max(0, Math.ceil((a + W) / step - 1e-9)), g1 = Math.min(steps, Math.floor((b + W) / step + 1e-9));
+          if (g0 <= g1) { cover[g0]++; cover[g1 + 1]--; }
+        });
+        let best = target, bestN = Infinity, run = 0;
+        for (let g = 0; g <= steps; g++) {
+          run += cover[g];
+          const c = -W + step * g;
+          if (run < bestN || (run === bestN && Math.abs(c - target) < Math.abs(best - target))) { bestN = run; best = c; }
+        }
+        x = best;
+      }
+      xs[i] = x; placed.push(i);
+    }
+    return { xs, clean };
+  }
+  // After a centre-packed pass, slide each point back toward its own jitter offset
+  // as far as its neighbours allow, so points away from the crowded rows keep the
+  // usual scattered look instead of lining up on the centre (and the error bar).
+  // Each move lands on a spot clear of every other point, so no overlap is added,
+  // and stays inside the usual cloud half-width W so packed rows are not
+  // reshuffled into gappy, wider rows.
+  function settleTowardJitter(pts, order, xs, W, s) {
+    let rMax = 0; pts.forEach((p) => { if (p.r > rMax) rMax = p.r; });
+    const reach = (2 * rMax + SWARM_GAP) * s;
+    const seq = order.filter((i) => isFinite(pts[i].y));
+    const CROWD = 64;   // a point with this many close neighbours is boxed in — leave it be
+    for (let k = 0; k < seq.length; k++) {
+      const i = seq[k], p = pts[i], blocks = [];
+      const add = (j) => { const d = (p.r + pts[j].r + SWARM_GAP) * s, dy = Math.abs(p.y - pts[j].y); if (dy < d) { const w = Math.sqrt(d * d - dy * dy); blocks.push([xs[j] - w, xs[j] + w]); } };
+      for (let m = k - 1; m >= 0 && p.y - pts[seq[m]].y < reach && blocks.length <= CROWD; m--) add(seq[m]);
+      for (let m = k + 1; m < seq.length && pts[seq[m]].y - p.y < reach && blocks.length <= CROWD; m++) add(seq[m]);
+      if (blocks.length > CROWD) continue;
+      const x = clearSpot(blocks, Math.max(-W, Math.min(W, p.pref)), W);
+      if (x != null && Math.abs(x - p.pref) < Math.abs(xs[i] - p.pref)) xs[i] = x;
+    }
+    return xs;
+  }
+  // Widest half-width a column's points may use: its own category slot, less the
+  // marker radius and a small margin so neighbouring categories never merge.
+  function columnReach(slot, pts) {
+    let rMax = 0; pts.forEach((p) => { if (p.r > rMax) rMax = p.r; });
+    return Math.max(0, slot / 2 - rMax - 2);
+  }
+  // Horizontal offsets for one column of points. W0 is the usual half-width of the
+  // point cloud; when the points cannot all sit clear of one another there, the
+  // cloud may widen up to Wmax (the category's own slot) before markers are
+  // finally allowed to overlap partially. Deterministic for identical input.
+  function swarmOffsets(pts, W0, Wmax) {
+    if (!pts.length) return [];
+    W0 = Math.max(0, W0 || 0); Wmax = Math.max(W0, Wmax || 0);
+    const yKey = (p) => (isFinite(p.y) ? p.y : Infinity);
+    const order = pts.map((_, i) => i).sort((a, b) => { const ya = yKey(pts[a]), yb = yKey(pts[b]); return ya === yb ? a - b : ya < yb ? -1 : 1; });
+    const tiers = [[W0, 1, false], [W0, 1, true]];
+    if (Wmax > W0) tiers.push([Wmax, 1, true]);
+    tiers.push([Wmax, 0.75, true]);
+    for (const [W, s, c] of tiers) {
+      const r = swarmPass(pts, order, W, s, c, false);
+      if (r.clean) return c ? settleTowardJitter(pts, order, r.xs, W0, s) : r.xs;
+    }
+    return settleTowardJitter(pts, order, swarmPass(pts, order, Wmax, 0.5, true, true).xs, W0, 0.5);
+  }
+
   // ---- numeric helpers ----
   function mean(a) { return a.reduce((s, v) => s + v, 0) / a.length; }
   function sd(a) { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); }
@@ -397,7 +518,9 @@ const Charts = (function () {
       if (opts.showPoints) {
         const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
         let seed = i * 99 + 7;
-        st.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * bw * 0.7; const px = x + j, py = sc.toY(v); const dim = overlapsErrorBar(px, py, 3.1, ebar); marks += markerSVG(px, py, 3.1, ptShape(opts, i, vi, seriesShape), { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, opacity: dim ? 0.32 : 1, attrs: ptAttrs(i, vi, px, py) }); });
+        const pts = st.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * bw * 0.7, r: markerRadius(3.1, shape, 0.8), shape }; });
+        const offs = swarmOffsets(pts, bw * 0.35, columnReach(slot, pts));
+        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; const dim = overlapsErrorBar(px, py, 3.1, ebar); marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, opacity: dim ? 0.32 : 1, attrs: ptAttrs(i, vi, px, py) }); });
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(st.name)}</text>`;
@@ -466,7 +589,9 @@ const Charts = (function () {
       const err = errType === 'sem' ? se : errType === 'ci95' ? tcrit95(g.values.length - 1) * se : sdv;
       const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
       let seed = i * 131 + 17;
-      g.values.forEach((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const j = (seed / 233280 - 0.5) * spread; const px = x + j, py = sc.toY(v); marks += markerSVG(px, py, 3.6, ptShape(opts, i, vi, seriesShape), { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
+      const pts = g.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * spread, r: markerRadius(3.6, shape, 0.8), shape }; });
+      const offs = swarmOffsets(pts, spread / 2, columnReach(slot, pts));
+      pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.6, pt.shape, { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       // mean line + error
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
       if (errType !== 'none') {
@@ -518,7 +643,10 @@ const Charts = (function () {
       marks += `<line x1="${x}" y1="${sc.toY(q1)}" x2="${x}" y2="${sc.toY(wlo)}" stroke="${col}" stroke-width="1.3"/>`;
       marks += `<line x1="${x - bw / 4}" y1="${sc.toY(whi)}" x2="${x + bw / 4}" y2="${sc.toY(whi)}" stroke="${col}" stroke-width="1.3"/>`;
       marks += `<line x1="${x - bw / 4}" y1="${sc.toY(wlo)}" x2="${x + bw / 4}" y2="${sc.toY(wlo)}" stroke="${col}" stroke-width="1.3"/>`;
-      sorted.filter((v) => v < lowF || v > highF).forEach((v) => { marks += `<circle cx="${x}" cy="${sc.toY(v)}" r="3" fill="none" stroke="${col}" stroke-width="1.2"/>`; });
+      // outliers sit on the centre line unless near-equal ones would hide each other
+      const outl = sorted.filter((v) => v < lowF || v > highF).map((v) => ({ y: sc.toY(v), pref: 0, r: markerRadius(3, 'circle', 1.2) }));
+      const outX = swarmOffsets(outl, bw / 4, columnReach(slot, outl));
+      outl.forEach((o, k) => { marks += `<circle class="box-outlier" cx="${(x + outX[k]).toFixed(2)}" cy="${o.y}" r="3" fill="none" stroke="${col}" stroke-width="1.2"/>`; });
       tops.push(sc.toY(whi));
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
       tally(g.values, sc, t);
@@ -847,7 +975,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
+  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;
