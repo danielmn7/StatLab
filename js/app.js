@@ -317,6 +317,8 @@
   let pendingSel = null; // {tableId, sel, active} restored across structural re-renders
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
   const rectOf = (a, b) => ({ r1: Math.min(a.r, b.r), c1: Math.min(a.c, b.c), r2: Math.max(a.r, b.r), c2: Math.max(a.c, b.c) });
+  // Clipboard text spanning several cells: a row/column break other than trailing line ends.
+  const isMultiCell = (text) => /[\t\r\n]/.test(String(text || '').replace(/[\r\n]+$/, ''));
 
   function columnHeader(table) {
     const thead = el('thead'); const hr = el('tr');
@@ -499,6 +501,15 @@
         else if (ev.key === 'Escape') { ev.preventDefault(); this.cancelEdit(); }
       });
       inp.addEventListener('blur', () => { if (this.editing) this.commitEdit(); });
+      // A single-line input joins pasted rows/columns into this one cell, so spread
+      // multi-cell clipboard text over the grid instead; single values paste natively.
+      inp.addEventListener('paste', (ev) => {
+        const text = (ev.clipboardData || window.clipboardData).getData('text');
+        if (!isMultiCell(text)) return;
+        ev.preventDefault(); ev.stopPropagation();
+        this.editing = false; // the paste replaces the draft, like a paste onto the selected cell
+        this.pasteGrid(text);
+      });
     }
     commitEdit() {
       const { r, c } = this.active; const td = this.cellTd(r, c);
@@ -524,6 +535,10 @@
       if (this.editing || e.target.tagName === 'INPUT') return;
       const text = (e.clipboardData || window.clipboardData).getData('text'); if (!text) return;
       e.preventDefault();
+      this.pasteGrid(text);
+    }
+    // Fill tab/newline-delimited text into the grid, starting at the active cell.
+    pasteGrid(text) {
       const start = this.active || { r: 0, c: 0 };
       const parsed = D.parseDelimited(text);
       parsed.rows.forEach((rrow, i) => rrow.forEach((v, j) => this.table.setCell(start.r + i, start.c + j, v)));

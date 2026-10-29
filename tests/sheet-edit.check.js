@@ -36,7 +36,7 @@ async function fixture(type = 'column', old = '9876', c = 0) {
   assert.strictEqual(await run(`window.StatLab.loadStateJSON(${JSON.stringify(json)})`), true);
   return (await state()).tables[0];
 }
-async function click(selector, count = 1) {
+async function click(selector, count = 1, modifiers = 0) {
   const point = await run(`(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
     if (!target || !target.checkVisibility()) throw new Error('Not visible: ' + ${JSON.stringify(selector)});
@@ -46,10 +46,10 @@ async function click(selector, count = 1) {
   })()`);
   for (let clickCount = 1; clickCount <= count; clickCount++) {
     await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
-      type: 'mousePressed', button: 'left', clickCount, ...point,
+      type: 'mousePressed', button: 'left', clickCount, modifiers, ...point,
     });
     await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', {
-      type: 'mouseReleased', button: 'left', clickCount, ...point,
+      type: 'mouseReleased', button: 'left', clickCount, modifiers, ...point,
     });
   }
 }
@@ -71,6 +71,34 @@ async function typeText(text) {
   }
 }
 const active = (r, c) => run(`!!document.querySelector(${JSON.stringify(cell(r, c) + '.active')})`);
+// Clipboard events carry their own DataTransfer, so these tests never touch the OS clipboard.
+const copySelection = () => run(`(() => {
+  const data = new DataTransfer();
+  document.querySelector('.sheet-wrap').dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }));
+  return data.getData('text/plain');
+})()`);
+const pasteIntoEditor = (text) => run(`(() => {
+  const data = new DataTransfer(); data.setData('text/plain', ${JSON.stringify(text)});
+  const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+  document.querySelector('input.celledit').dispatchEvent(event);
+  return event.defaultPrevented;
+})()`);
+const selected = () => run(`Array.from(document.querySelectorAll('td.dcell.sel'), (td) => td.dataset.r + ',' + td.dataset.c).join(' ')`);
+async function copyPasteFixture(destType) {
+  const source = new D.DataTable('column');
+  source.id = 'copy-source';
+  source.rows = Array.from({ length: 4 }, () => new Array(source.width()).fill(''));
+  ['1.5', '-2.25e-3', '0'].forEach((v, r) => source.setCell(r, 0, v));
+  const dest = new D.DataTable(destType);
+  dest.id = 'copy-dest';
+  dest.rows = Array.from({ length: 4 }, () => new Array(dest.width()).fill(''));
+  if (destType === 'grouped') dest.rowTitles = ['Row 1', 'Row 2', 'Row 3', 'Row 4'];
+  const json = JSON.stringify({ tables: [source, dest], results: [], graphs: [],
+    counter: 2, active: { view: 'data', id: source.id } });
+  assert.strictEqual(await run(`window.StatLab.loadStateJSON(${JSON.stringify(json)})`), true);
+  return JSON.parse(JSON.stringify(dest.rows));
+}
+const destRows = async () => (await state()).tables.find((t) => t.id === 'copy-dest').rows;
 
 app.whenReady().then(async () => {
   win = new BrowserWindow({ show: false, width: 1320, height: 860,
@@ -148,6 +176,38 @@ app.whenReady().then(async () => {
   await click('.notes-area');
   check('blur commits the exact replacement',
     await value() === '1234' && await run(`!document.querySelector('input.celledit')`));
+
+  // Copy a column selection, then paste it into another table whose cell editor is open.
+  for (const [destType, c] of [['column', 1], ['grouped', 3]]) {
+    const empty = await copyPasteFixture(destType);
+    await click(cell(0, 0));
+    await click(cell(2, 0), 1, 8); // Shift-click extends the selection.
+    const copied = await copySelection();
+    assert.strictEqual(copied, '1.5\n-2.25e-3\n0', 'copying a column selection yields one line per row');
+    await run(`document.querySelector('.nav-item[data-view="data"][data-id="copy-dest"]').click()`);
+    await click(cell(0, c), 2);
+    assert.ok(await editor(), 'double-click opens the destination cell editor');
+    check(destType + ' editor paste keeps the copied rows in separate cells', await pasteIntoEditor(copied)
+      && JSON.stringify((await destRows()).map((row) => row[c])) === JSON.stringify(['1.5', '-2.25e-3', '0', ''])
+      && JSON.stringify((await destRows()).map((row) => row.filter((_, j) => j !== c)))
+        === JSON.stringify(empty.map((row) => row.filter((_, j) => j !== c))));
+    check(destType + ' editor paste closes the editor and selects the pasted range',
+      await run(`!document.querySelector('input.celledit')`) && await selected() === `0,${c} 1,${c} 2,${c}` && await active(0, c));
+  }
+
+  const empty = await copyPasteFixture('column');
+  await run(`document.querySelector('.nav-item[data-view="data"][data-id="copy-dest"]').click()`);
+  await click(cell(1, 0));
+  await typeText('99');
+  check('multi-column editor paste replaces the typed draft across rows and columns',
+    await pasteIntoEditor('4\t5\r\n6\t7\r\n') && JSON.stringify(await destRows())
+      === JSON.stringify([empty[0], ['4', '5'], ['6', '7'], empty[3]]));
+
+  await click(cell(3, 0));
+  await typeText('1');
+  check('a single copied value still pastes natively into the open editor',
+    !(await pasteIntoEditor('42\n')) && (await editor()).value === '1' && (await destRows())[3][0] === '');
+  await key('Escape', 27);
 
   await fixture();
   await click(cell(0, 0));
