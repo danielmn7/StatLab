@@ -485,7 +485,9 @@
       this.editing = true;
       const cur = this.table.getCell(r, c);
       const inp = el('input', { class: 'celledit', value: initial != null ? initial : (cur == null ? '' : cur) });
-      td.innerHTML = ''; td.append(inp); inp.focus(); if (initial == null) inp.select();
+      td.innerHTML = ''; td.append(inp); inp.focus();
+      if (initial == null) inp.select();
+      else inp.setSelectionRange(inp.value.length, inp.value.length);
       inp.addEventListener('keydown', (ev) => {
         ev.stopPropagation();
         if (ev.key === 'Enter') { ev.preventDefault(); this.commitEdit(); this.move(1, 0); }
