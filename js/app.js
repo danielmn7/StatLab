@@ -79,7 +79,7 @@
   // Data edits must invalidate every graph/result derived from the edited table.
   // Visual controls are intentionally preserved while data-derived fields (means,
   // curves, regression and significance values) are rebuilt from the source table.
-  const LINKED_VISUAL_OPTIONS = ['title', 'xLabel', 'yLabel', 'percent', 'atRisk', 'showCI', 'showPoints', 'errorType', 'colors', 'paletteId', 'barBorder', 'barWidth', 'markers', 'marker', 'pointColor', 'pointMarkers', 'fontStyle', 'sigStyle', 'legendPosition', 'yAxis', 'xAxis'];
+  const LINKED_VISUAL_OPTIONS = ['title', 'xLabel', 'yLabel', 'percent', 'atRisk', 'showCI', 'showPoints', 'errorType', 'colors', 'paletteId', 'barBorder', 'barWidth', 'compactSpacing', 'markers', 'marker', 'pointColor', 'pointMarkers', 'fontStyle', 'sigStyle', 'legendPosition', 'yAxis', 'xAxis'];
   function compatibleChartType(current, fresh) {
     const families = {
       grouped: ['grouped', 'grouped-line'],
@@ -1415,6 +1415,14 @@
     if (spec.chartType === 'grouped-line') return Charts.groupedLine(spec.cells, spec.rowNames, spec.colNames, o);
     return '<svg viewBox="0 0 100 40"><text x="10" y="24">No chart</text></svg>';
   }
+  // Draw every figure at the scale of a full-width one: a compact (narrower) figure
+  // keeps its text and bar sizes instead of being stretched to fill the canvas.
+  function scaleFigure(canvas) {
+    const svg = canvas.querySelector('svg');
+    if (!svg) return;
+    const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+    if (vb.length === 4 && vb[2] > 0 && vb[2] < Charts.FIG_WIDTH) svg.style.width = (100 * vb[2] / Charts.FIG_WIDTH).toFixed(3) + '%';
+  }
 
   // ---------- result view ----------
   function renderResultView(root, result) {
@@ -1458,11 +1466,13 @@
     }
     const wrap = el('div', { class: 'graph-wrap' });
     const canvas = el('div', { class: 'graph-canvas', id: 'graph-canvas' });
-    canvas.innerHTML = buildSVG(graph.spec);
+    // chart builders escape every user label (esc/escAttr), so their markup is safe to insert
+    const draw = () => { canvas.innerHTML = buildSVG(graph.spec); scaleFigure(canvas); };
+    draw();
     wrap.append(canvas);
 
     const controls = el('div', { class: 'graph-controls' });
-    const rerender = () => { canvas.innerHTML = buildSVG(graph.spec); saveState(); };
+    const rerender = () => { draw(); saveState(); };
 
     // ---- category reordering (persists to spec; remaps significance brackets) ----
     const refresh = () => { saveState(); renderContent(); };
@@ -1540,6 +1550,14 @@
       controls.append(el('div', { class: 'ctrl-note' }, ctb === 'dot'
         ? 'Wider spreads the points apart; narrower packs them into a tighter column.'
         : 'Narrower ' + (ctb === 'box' ? 'boxes' : 'bars') + ' leave more space between categories.'));
+    }
+    // compact column spacing: size the plot to its categories instead of the full figure width
+    if (['bar', 'dot', 'box', 'grouped'].includes(ct)) {
+      controls.append(ctrlGroup('Column spacing', checkbox('Compact (fit width to columns)', o.compactSpacing !== false, (v) => {
+        if (v) delete o.compactSpacing; else o.compactSpacing = false;
+        rerender();
+      })));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Keeps columns close together, as in journal figures. Turn off to spread them across the full figure width.'));
     }
     // title & axis labels
     controls.append(ctrlGroup('Title', el('input', { type: 'text', value: o.title || '', oninput: (e) => { o.title = e.target.value; rerender(); } })));

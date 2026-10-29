@@ -279,7 +279,8 @@ const Charts = (function () {
     const W = opts.width || 580, H = opts.height || 420;
     const m = Object.assign({ top: 46, right: 24, bottom: 64, left: 70 }, opts.margin || {});
     const pw = W - m.left - m.right, ph = H - m.top - m.bottom;
-    return { W, H, m, pw, ph, x0: m.left, x1: m.left + pw, y0: m.top, y1: m.top + ph };
+    // padL: extra left margin a compact figure adds to centre its plot (see columnFrame)
+    return { W, H, m, pw, ph, x0: m.left, x1: m.left + pw, y0: m.top, y1: m.top + ph, padL: opts.padL || 0 };
   }
   function open(f, title, ts) {
     ts = ts || textStyleOf(null);
@@ -296,7 +297,7 @@ const Charts = (function () {
       s += `<line x1="${f.x0 - 5}" y1="${y}" x2="${f.x0}" y2="${y}" stroke="#1c2733" stroke-width="1.1"/>`;
       s += `<text x="${f.x0 - 9}" y="${y + 4}" text-anchor="end" font-size="${ts.tickSize}" fill="#5b6b7b">${(sc.fmt || fmt)(t)}</text>`;
     });
-    if (label) s += `<text transform="translate(${18},${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(label)}</text>`;
+    if (label) s += `<text transform="translate(${18 + (f.padL || 0)},${(f.y0 + f.y1) / 2}) rotate(-90)" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(label)}</text>`;
     return s;
   }
   // ---- axis scaling: linear/log, auto or custom range, plain/scientific labels ----
@@ -351,7 +352,11 @@ const Charts = (function () {
     return { ticks, min, max, log: false, fmt: mkFmt(axis), frac: (v) => (v - min) / (max - min) };
   }
   function makeYScale(f, lo, hi, nticks, axis) {
-    const sc = axisScale(lo, hi, axis, nticks || 6);
+    return withY(f, axisScale(lo, hi, axis, nticks || 6));
+  }
+  // attach the pixel mapping to a scale built before its frame (column charts size the
+  // frame from the data, so they choose the axis range first)
+  function withY(f, sc) {
     sc.toY = (v) => f.y1 - sc.frac(v) * f.ph;
     return sc;
   }
@@ -363,11 +368,15 @@ const Charts = (function () {
       `<g clip-path="url(#pc_${uid})">${marks}</g>`;
   }
   function tally(vals, sc, t) { vals.forEach((v) => { if (sc.log && !(v > 0)) t.log++; else if (v < sc.min - 1e-9 || v > sc.max + 1e-9) t.out++; }); }
-  function noticeSVG(f, t) {
+  function noticeLines(t) {
     const lines = [];
     if (t.logFail) lines.push('⚠ Log axis needs positive data — showing linear');
     if (t.log) lines.push(`⚠ ${t.log} non-positive value${t.log > 1 ? 's' : ''} omitted (log axis)`);
     if (t.out) lines.push(`⚠ ${t.out} value${t.out > 1 ? 's' : ''} outside axis range not shown`);
+    return lines;
+  }
+  function noticeSVG(f, t) {
+    const lines = noticeLines(t);
     return lines.map((tx, i) => `<text x="${f.x0}" y="${f.H - 8 - (lines.length - 1 - i) * 13}" font-size="10.5" fill="#b45309">${esc(tx)}</text>`).join('');
   }
   // transparent per-category drag handles / drop targets (categorical charts).
@@ -468,10 +477,78 @@ const Charts = (function () {
     return Math.min(cap, slot * mult);
   }
 
+  // ---- compact column spacing ----
+  // Categorical charts used to spread their columns across the full default plot
+  // width, so a figure with two or three bars had gaps three times wider than the
+  // bars. By default the plot is now sized to its categories: each gets a slot for
+  // its mark plus a modest gap, widened only where a category name or a dense column
+  // of points needs the room. The plot never grows past the legacy width, so charts
+  // with many categories are unchanged. opts.compactSpacing === false (or an explicit
+  // opts.width) restores the full-width layout.
+  const FIG_W = 580;      // default figure width (viewBox units)
+  const COL_SLOT = 90;    // compact slot per category: a 54 px bar (60%) and a 36 px gap
+  const BOX_KEY = 'box: median & IQR · whiskers: 1.5×IQR';
+  function compactSpacing(opts) { return !(opts && (opts.compactSpacing === false || +opts.width > 0)); }
+  // Approximate rendered width (px) of `str` in the figure font. Builders also run
+  // without a DOM (exports, Node tests), so this uses Helvetica/Arial advance widths
+  // grouped into a few classes, rounded up; bold text is about 7% wider.
+  function textWidth(str, size, bold) {
+    let em = 0;
+    for (const ch of String(str == null ? '' : str)) {
+      if ('iljI.,:;!|\''.includes(ch)) em += 0.25;
+      else if ('ftr ()[]-/'.includes(ch)) em += 0.34;
+      else if ('mwMW%@'.includes(ch)) em += 0.88;
+      else if (ch >= 'A' && ch <= 'Z') em += 0.7;
+      else if (ch.charCodeAt(0) < 128) em += 0.57;    // lowercase, digits, other ASCII
+      else em += 0.8;                                 // µ, ±, ⚠ and other symbols
+    }
+    return em * size * (bold ? 1.07 : 1);
+  }
+  // Slot a column of markers needs so near-equal values can sit side by side: points
+  // within half a diameter of one another in y are packed one diameter apart outward
+  // from the centre, and columnReach keeps a marker radius plus 2 px inside the slot.
+  // ys: pixel offsets (non-finite = not drawn); r: the column's largest marker radius.
+  function swarmSlot(ys, r) {
+    const d = 2 * r + SWARM_GAP, s = ys.filter((y) => isFinite(y)).sort((a, b) => a - b);
+    let k = 0;
+    for (let i = 0, j = 0; i < s.length; i++) { while (s[i] - s[j] > d / 2) j++; k = Math.max(k, i - j + 1); }
+    return 2 * Math.ceil(Math.max(0, k - 1) / 2) * d + 2 * r + 4;
+  }
+  // Compact slot for categories named `labels`: the base slot, widened so neighbouring
+  // names don't collide and so each entry of `swarm` (a column's slot need) fits.
+  function compactSlot(base, labels, ts, swarm) {
+    let slot = base;
+    labels.forEach((name) => { slot = Math.max(slot, textWidth(name, ts.catSize) + 10); });
+    (swarm || []).forEach((w) => { slot = Math.max(slot, w); });
+    return slot;
+  }
+  // Least plot width the bottom-row notes need: warnings run right from the plot's
+  // left edge and the key (e.g. "mean ± SEM") ends at its right edge, so together
+  // they must fit across the plot; a key alone may overhang into the left margin.
+  function bottomRowPlot(m, keyText, t) {
+    const key = keyText ? textWidth(keyText, 10.5) : 0;
+    const warn = noticeLines(t).reduce((w, line) => Math.max(w, textWidth(line, 10.5)), 0);
+    return warn ? warn + (key ? key + 12 : 0) : key - m.left + 8;
+  }
+  // Frame for a categorical chart (bar, dot, box, grouped bar). With compact spacing
+  // the plot holds n slots of `slot` px, at least minPlot wide and never wider than
+  // the legacy plot. A figure that needs more width than that (minFigure, e.g. for a
+  // long title) pads both sides, keeping the columns together under the title.
+  function columnFrame(opts, margin, n, slot, minPlot, minFigure) {
+    const m = Object.assign({ top: 46, right: 24, bottom: 64, left: 70 }, margin || {});
+    const base = Object.assign({}, opts, { margin: m });
+    if (!compactSpacing(opts) || !(n > 0)) return frame(base);
+    const pw = Math.ceil(Math.min(FIG_W - m.left - m.right, Math.max(n * slot, minPlot || 0)));
+    const w = m.left + pw + m.right;
+    const extra = Math.ceil(Math.max(0, Math.min(FIG_W, minFigure || 0) - w));
+    const padL = Math.floor(extra / 2);
+    return frame(Object.assign(base, { width: w + extra, padL, margin: Object.assign({}, m, { left: m.left + padL, right: m.right + extra - padL }) }));
+  }
+  function titleRoom(title, ts) { return title ? textWidth(title, ts.titleSize, ts.bold) + 24 : 0; }
+
   // ---- 1. bar chart with error bars ----
   function barChart(groups, opts = {}) {
     opts = opts || {};
-    const f = frame(opts);
     const colors = opts.colors || PALETTE;
     const errType = opts.errorType || 'sem';
     const stats = groups.map((g) => {
@@ -482,18 +559,26 @@ const Charts = (function () {
     const yAx = opts.yAxis || {};
     const hi = Math.max(...stats.map((s) => s.m + s.err), ...groups.flatMap((g) => opts.showPoints ? g.values : []));
     const dmin = Math.min(0, ...stats.map((s) => s.m - s.err), ...groups.flatMap((g) => opts.showPoints ? g.values : []));
-    const sc = makeYScale(f, dmin, hi * 1.08, 6, yAx);
-    const uid = ++_uid;
+    const scale = axisScale(dmin, hi * 1.08, yAx, 6);
+    const t = { log: 0, out: 0, logFail: yAx.log && !scale.log };
+    stats.forEach((st) => tally(opts.showPoints ? st.values : [st.m], scale, t));
+    const ts = textStyleOf(opts);
     const n = groups.length;
+    // compact layout: slots fit the bars, their names and (when shown) each point column
+    const f0 = frame(opts);
+    const swarm = opts.showPoints ? groups.map((g, i) => swarmSlot(g.values.map((v) => scale.frac(v) * f0.ph),
+      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.1, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0))) : [];
+    const f = columnFrame(opts, opts.margin, n, compactSlot(COL_SLOT, stats.map((st) => st.name), ts, swarm),
+      bottomRowPlot(f0.m, errLabel(errType), t), titleRoom(opts.title, ts));
+    const sc = withY(f, scale);
+    const uid = ++_uid;
     const slot = f.pw / n, bw = slotWidth(opts, slot, 0.6, 58);
     const barFill = opts.showPoints ? 0.5 : 0.82;   // dim the bar when points overlay it so they read clearly
-    const ts = textStyleOf(opts);
     let s = open(f, opts.title, ts);
     // zero line / y axis
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
-    const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
     let marks = '';
     stats.forEach((st, i) => {
       const x = f.x0 + slot * i + slot / 2;
@@ -524,7 +609,6 @@ const Charts = (function () {
       }
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(st.name)}</text>`;
-      tally(opts.showPoints ? st.values : [st.m], sc, t);
     });
     s += clipWrap(f, uid, marks);
     s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
@@ -535,8 +619,9 @@ const Charts = (function () {
     return s;
   }
 
+  function errLabel(errType) { return { sd: 'mean ± SD', sem: 'mean ± SEM', ci95: 'mean ± 95% CI', none: 'mean' }[errType] || ''; }
   function errLegend(f, errType) {
-    const label = { sd: 'mean ± SD', sem: 'mean ± SEM', ci95: 'mean ± 95% CI', none: 'mean' }[errType] || '';
+    const label = errLabel(errType);
     if (!label) return '';
     return `<text x="${f.x1}" y="${f.H - 8}" text-anchor="end" font-size="10.5" fill="#8696a7">${label}</text>`;
   }
@@ -550,7 +635,7 @@ const Charts = (function () {
     const gap = 17;
     let x, y;
     if (pos === 'right') { x = f.x1 + 18; y = f.y0 + 12; }
-    else if (pos === 'left') { x = 22; y = f.y0 + 12; }
+    else if (pos === 'left') { x = 22 + (f.padL || 0); y = f.y0 + 12; }
     else if (pos === 'top') { x = f.x0; y = f.y0 - 12 - (names.length - 1) * gap; }
     else { x = f.x1 - 118; y = f.y1 + 42; }
     let s = `<g class="chart-legend" data-position="${pos}">`;
@@ -564,23 +649,31 @@ const Charts = (function () {
 
   // ---- 2. column dot plot (individual points + mean/error line) ----
   function dotPlot(groups, opts = {}) {
-    const f = frame(opts);
     const colors = opts.colors || PALETTE;
     const errType = opts.errorType || 'sd';
     const yAx = opts.yAxis || {};
     const all = groups.flatMap((g) => g.values);
-    const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6, yAx);
+    const scale = axisScale(Math.min(...all), Math.max(...all), yAx, 6);
+    const t = { log: 0, out: 0, logFail: yAx.log && !scale.log };
+    groups.forEach((g) => tally(g.values, scale, t));
+    const ts = textStyleOf(opts);
+    const n = groups.length;
+    // compact layout: slots fit each point column and the category names
+    const f0 = frame(opts);
+    const swarm = groups.map((g, i) => swarmSlot(g.values.map((v) => scale.frac(v) * f0.ph),
+      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.6, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0)));
+    const f = columnFrame(opts, opts.margin, n, compactSlot(COL_SLOT, groups.map((g) => g.name), ts, swarm),
+      bottomRowPlot(f0.m, errLabel(errType), t), titleRoom(opts.title, ts));
+    const sc = withY(f, scale);
     const uid = ++_uid;
-    const n = groups.length, slot = f.pw / n;
+    const slot = f.pw / n;
     const spread = slotWidth(opts, slot, 0.5, 46);                 // horizontal extent of the jittered point cloud
     const customW = opts.barWidth != null && isFinite(+opts.barWidth) && +opts.barWidth > 0;
     const wm = customW ? Math.max(12, spread / 2) : 22;            // mean/median bar half-width brackets the cloud
-    const ts = textStyleOf(opts);
     let s = open(f, opts.title, ts);
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
-    const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
     let marks = '';
     groups.forEach((g, i) => {
       const x = f.x0 + slot * i + slot / 2; cx.push(x);
@@ -601,7 +694,6 @@ const Charts = (function () {
         tops.push(sc.toY(m + err));
       } else tops.push(sc.toY(Math.max(...g.values)));
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
-      tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
     s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
@@ -614,19 +706,23 @@ const Charts = (function () {
 
   // ---- 3. box-and-whisker ----
   function boxPlot(groups, opts = {}) {
-    const f = frame(opts);
     const colors = opts.colors || PALETTE;
     const yAx = opts.yAxis || {};
     const all = groups.flatMap((g) => g.values);
-    const sc = makeYScale(f, Math.min(...all), Math.max(...all), 6, yAx);
-    const uid = ++_uid;
-    const n = groups.length, slot = f.pw / n, bw = slotWidth(opts, slot, 0.5, 48);
+    const scale = axisScale(Math.min(...all), Math.max(...all), yAx, 6);
+    const t = { log: 0, out: 0, logFail: yAx.log && !scale.log };
+    groups.forEach((g) => tally(g.values, scale, t));
     const ts = textStyleOf(opts);
+    const n = groups.length;
+    const f = columnFrame(opts, opts.margin, n, compactSlot(COL_SLOT, groups.map((g) => g.name), ts),
+      bottomRowPlot(frame(opts).m, BOX_KEY, t), titleRoom(opts.title, ts));
+    const sc = withY(f, scale);
+    const uid = ++_uid;
+    const slot = f.pw / n, bw = slotWidth(opts, slot, 0.5, 48);
     let s = open(f, opts.title, ts);
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
     const cx = [], tops = [];
-    const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
     let marks = '';
     groups.forEach((g, i) => {
       const x = f.x0 + slot * i + slot / 2; cx.push(x);
@@ -649,11 +745,10 @@ const Charts = (function () {
       outl.forEach((o, k) => { marks += `<circle class="box-outlier" cx="${(x + outX[k]).toFixed(2)}" cy="${o.y}" r="3" fill="none" stroke="${col}" stroke-width="1.2"/>`; });
       tops.push(sc.toY(whi));
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
-      tally(g.values, sc, t);
     });
     s += clipWrap(f, uid, marks);
     s += sigBrackets(f, cx, tops, opts.sig, sigStyleOf(opts));
-    s += `<text x="${f.x1}" y="${f.H - 8}" text-anchor="end" font-size="10.5" fill="#8696a7">box: median &amp; IQR · whiskers: 1.5×IQR</text>`;
+    s += `<text x="${f.x1}" y="${f.H - 8}" text-anchor="end" font-size="10.5" fill="#8696a7">${esc(BOX_KEY)}</text>`;
     s += noticeSVG(f, t);
     s += catHits(f, n);
     s += '</svg>';
@@ -819,7 +914,7 @@ const Charts = (function () {
       bottom: 64 + (lp === 'bottom' ? colNames.length * 17 + 18 : 0),
       left: lp === 'left' ? 150 : 70,
     };
-    const f = frame(Object.assign({}, opts, { margin: Object.assign(defaultMargin, opts.margin || {}) }));
+    const margin = Object.assign(defaultMargin, opts.margin || {});
     const colors = opts.colors || PALETTE;
     const errType = opts.errorType || 'sem';
     const a = rowNames.length, b = colNames.length;
@@ -828,9 +923,17 @@ const Charts = (function () {
     let hi = 0, lo = 0;
     cs.forEach((row) => row.forEach((c) => { if (!c.empty) { hi = Math.max(hi, c.m + c.err); lo = Math.min(lo, c.m - c.err); } }));
     const yAx = opts.yAxis || {};
-    const sc = makeYScale(f, Math.min(0, lo), hi * 1.08, 6, yAx);
-    const uid = ++_uid;
+    const scale = axisScale(Math.min(0, lo), hi * 1.08, yAx, 6);
+    const t = { log: 0, out: 0, logFail: yAx.log && !scale.log };
+    cs.forEach((row) => row.forEach((c) => { if (!c.empty) tally([c.m], scale, t); }));
     const ts = textStyleOf(opts);
+    // compact layout: each row's cluster of b bars at full width (46 px per bar) with a
+    // clear gap between clusters; a legend above the plot needs room for its longest name
+    const legendTop = lp === 'top' ? colNames.reduce((w, nm) => Math.max(w, textWidth(nm, 11.5)), 0) + 22 - margin.right : 0;
+    const f = columnFrame(opts, margin, a, compactSlot(Math.max(b * 46 / 0.82, b * 46 + 28), rowNames, ts),
+      Math.max(legendTop, bottomRowPlot(margin, errLabel(errType), t)), titleRoom(opts.title, ts));
+    const sc = withY(f, scale);
+    const uid = ++_uid;
     let s = open(f, opts.title, ts);
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${sc.toY(baseVal(sc))}" x2="${f.x1}" y2="${sc.toY(baseVal(sc))}" stroke="#1c2733" stroke-width="1.3"/>`;
@@ -838,7 +941,6 @@ const Charts = (function () {
     const groupW = Math.min(slot * 0.82, b * 46);
     const barW = (groupW / b) * 0.8;
     const barX = []; // barX[i][j]
-    const t = { log: 0, out: 0, logFail: yAx.log && !sc.log };
     let marks = '';
     for (let i = 0; i < a; i++) {
       const cx0 = f.x0 + slot * i + slot / 2; barX[i] = [];
@@ -855,7 +957,6 @@ const Charts = (function () {
           marks += `<line x1="${bx - 5}" y1="${yhi}" x2="${bx + 5}" y2="${yhi}" stroke="#1c2733" stroke-width="1.2"/>`;
           marks += `<line x1="${bx - 5}" y1="${ylo}" x2="${bx + 5}" y2="${ylo}" stroke="#1c2733" stroke-width="1.2"/>`;
         }
-        tally([c.m], sc, t);
       }
       s += `<text x="${cx0}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(rowNames[i])}</text>`;
     }
@@ -975,7 +1076,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
+  return { PALETTE, PALETTES, MARKERS, FIG_WIDTH: FIG_W, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;

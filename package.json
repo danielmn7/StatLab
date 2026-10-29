@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node tests/check.js && node tests/variance.check.js && node tests/reference-links.check.js && node tests/prism.check.js && node tests/ui.check.js && node tests/project-session-store.check.js",
-    "test:ui": "electron tests/navigator.check.js && electron tests/sidebar.check.js && electron tests/analysis.check.js && electron tests/variance-ui.check.js && electron tests/sheet-edit.check.js && node tests/project-session.check.js",
+    "test:ui": "electron tests/navigator.check.js && electron tests/sidebar.check.js && electron tests/analysis.check.js && electron tests/variance-ui.check.js && electron tests/sheet-edit.check.js && electron tests/figure-layout.check.js && node tests/project-session.check.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win"
   },
