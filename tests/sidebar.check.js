@@ -16,6 +16,21 @@ const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'))
 const branch = (id) => `.nav-branch[data-table-id="${id}"]`;
 const item = (view, id) => `.nav-item[data-view="${view}"][data-id="${id}"]`;
 const toggle = (id, view) => branch(id) + (view === 'data' ? ' .nav-toggle' : ` .nav-group[data-view="${view}"] .nav-group-toggle`);
+const jsUnsafeCharMap = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+const escapeUnsafeForJS = (str) => str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => jsUnsafeCharMap[ch]);
 function ok(name, condition) {
   assert.ok(condition, name);
   console.log('PASS', name);
@@ -36,7 +51,8 @@ async function expanded(id, view) {
   return run(`document.querySelector(${JSON.stringify(toggle(id, view))}).getAttribute('aria-expanded') === 'true'`);
 }
 async function action(label) {
-  await run(`Array.from(document.querySelectorAll('.view-actions button')).find((b) => b.textContent.includes(${JSON.stringify(label)})).click()`);
+  const safeLabel = escapeUnsafeForJS(JSON.stringify(label));
+  await run(`Array.from(document.querySelectorAll('.view-actions button')).find((b) => b.textContent.includes(${safeLabel})).click()`);
 }
 async function analyze() { await action('Analyze'); await click('#analyze-go'); }
 async function load(project) {
