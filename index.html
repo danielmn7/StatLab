@@ -37,18 +37,15 @@
   </header>
 
   <div class="layout">
-    <nav class="navigator" id="navigator">
+    <nav class="navigator" id="navigator" aria-label="Project contents">
       <div class="nav-section">
         <div class="nav-head nav-head-action"><span>Data tables</span><button id="btn-graph-all" class="nav-head-btn" title="Create or refresh one graph for every data table">◧ All</button></div>
-        <ul id="nav-tables" class="nav-list"></ul>
+        <ul id="nav-tables" class="nav-list" aria-label="Data tables and their results and graphs"></ul>
       </div>
-      <div class="nav-section">
-        <div class="nav-head">Results</div>
-        <ul id="nav-results" class="nav-list"></ul>
-      </div>
-      <div class="nav-section">
-        <div class="nav-head">Graphs</div>
-        <ul id="nav-graphs" class="nav-list"></ul>
+      <div class="nav-section" id="nav-unlinked-section" hidden>
+        <div class="nav-head">Unlinked items</div>
+        <div class="nav-caption">Source table unavailable</div>
+        <ul id="nav-unlinked" class="nav-list" aria-label="Items without a source table"></ul>
       </div>
     </nav>
 

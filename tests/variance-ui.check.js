@@ -58,6 +58,14 @@ async function choose(value) {
 }
 async function pasteGroups(groups) {
   await click('td.dcell[data-r="0"][data-c="0"]');
+  if (groups.every((g) => g.length === 0)) {
+    // An all-whitespace paste is intentionally ignored; clear through the real sheet keys.
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', windowsVirtualKeyCode: 8 });
+    await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', windowsVirtualKeyCode: 8 });
+    return;
+  }
   const rows = Array.from({ length: Math.max(10, ...groups.map((g) => g.length)) }, (_, i) => groups.map((g) => g[i] == null ? '' : g[i]).join('\t'));
   await run(`(() => {
     const transfer = new DataTransfer(); transfer.setData('text/plain', ${JSON.stringify(rows.join('\n'))});
@@ -123,7 +131,7 @@ app.whenReady().then(async () => {
   ok('linked graph keeps the mean-comparison p-value, not the variance p-value', near(saved.graphs[0].spec.opts.sig[0].p, welch.p) && !near(welch.p, T.brownForsythe([a, b]).p));
   ok('results include a copyable variance-test report with the F approximation stated', await run(`document.querySelector('.variance-check .apa').textContent.includes('median-centered Levene') && document.querySelector('.variance-check .apa').textContent.includes('approximate F reference')`));
 
-  await click('#nav-tables .nav-item');
+  await click('#nav-tables .nav-item[data-view="data"]');
   await openAnalyze();
   await choose('student');
   await click('#analyze-go');
@@ -131,7 +139,7 @@ app.whenReady().then(async () => {
   const student = T.unpairedT(a, b, false);
   ok('explicit Student selection is saved and its pooled calculation actually runs', saved.results[1].spec.welch === false && near(saved.graphs[1].spec.opts.sig[0].p, student.p) && !near(student.p, welch.p));
   ok('Student results retain the caution rather than silently switching to Welch', await run(`document.querySelector('.result-card h3').textContent.includes('Student') && !document.querySelector('.variance-choice').hidden`));
-  await click('#nav-tables .nav-item');
+  await click('#nav-tables .nav-item[data-view="data"]');
   await openAnalyze();
   await click('.test-opt[data-kind="variance"]');
   await click('#analyze-go');
@@ -172,7 +180,7 @@ app.whenReady().then(async () => {
   // Use the actual spreadsheet paste event so linked-result refresh is exercised.
   const editedA = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
   const editedB = editedA.map((v) => v + 50);
-  await click('#nav-tables .nav-item');
+  await click('#nav-tables .nav-item[data-view="data"]');
   await click('td.dcell[data-r="0"][data-c="0"]');
   const pasted = editedA.map((v, i) => `${v}\t${editedB[i]}`).join('\n');
   await run(`(() => {
@@ -184,7 +192,7 @@ app.whenReady().then(async () => {
   ok('source edits recompute all inline and standalone variance diagnostics', statuses.every((status) => status === 'inconclusive'));
   ok('source edits never switch either stored t-test choice', saved.results[0].spec.welch === true && saved.results[1].spec.welch === false);
   ok('source edits refresh linked graphs using each chosen mean test', near(saved.graphs[0].spec.opts.sig[0].p, T.unpairedT(editedA, editedB, true).p) && near(saved.graphs[1].spec.opts.sig[0].p, T.unpairedT(editedA, editedB, false).p));
-  await click('#nav-results .nav-item', 2);
+  await click('.nav-item[data-view="result"][data-id="' + saved.results[2].id + '"]');
   ok('nonsignificance is not displayed as proof of equal variances', await run(`document.querySelector('.variance-status').textContent.includes('does not establish equal variances') && !document.querySelector('.variance-status.pass')`));
   ok('p = 1 uses an inequality, never the malformed equals-inequality notation', await run(`document.querySelector('.variance-stat').textContent.includes('p > 0.9999') && !document.querySelector('.variance-check').textContent.includes('= >')`));
 
@@ -192,18 +200,19 @@ app.whenReady().then(async () => {
   for (const fixture of [
     { name: 'too few observations', groups: [[1], editedB] },
     { name: 'a removed group', groups: [editedA, []] },
+    { name: 'all groups removed', groups: [[], []] },
     { name: 'a third group', groups: [editedA, editedB, editedA] },
     { name: 'an infinite observation', groups: [['Infinity', ...editedA.slice(1)], editedB] },
     { name: 'different constants', groups: [Array(10).fill(4), Array(10).fill(8)] },
     { name: 'identical constants', groups: [Array(10).fill(4), Array(10).fill(4)] },
   ]) {
     await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(validProject))})`);
-    await click('#nav-tables .nav-item');
+    await click('#nav-tables .nav-item[data-view="data"]');
     await pasteGroups(fixture.groups);
     let invalidState = await state();
     ok(fixture.name + ' invalidates linked mean-test p-values', invalidState.graphs.every((g) => g.spec.unavailable && g.spec.opts.sig.length === 0));
-    ok(fixture.name + ' cannot produce a nonsignificant mean-test verdict', await run(`window.StatLabApp.results.filter((r) => r.kind === 'unpaired-t').every((r) => r.html.textContent.includes('unavailable') && !r.html.querySelector('.verdict.ns, .verdict.sig'))`));
-    await click('#nav-graphs .nav-item');
+    ok(fixture.name + ' cannot produce a nonsignificant mean-test verdict', await run(`window.StatLabApp.results.filter((r) => r.kind === 'unpaired-t').every((r) => !!r.html.querySelector('.unpaired-unavailable') && !!r.html.querySelector('.variance-check') && !r.html.querySelector('.verdict.ns, .verdict.sig'))`));
+    await click('.nav-item[data-view="graph"][data-id="' + invalidState.graphs[0].id + '"]');
     ok(fixture.name + ' hides the stale graph and disables both export paths', await run(`!!document.querySelector('.graph-unavailable') && !document.querySelector('.graph-canvas') && !window.StatLab.hasActiveGraph() && window.StatLab.activeGraphSVG() === null && Array.from(document.querySelectorAll('.view-actions button')).filter((b) => /SVG|PNG/.test(b.textContent)).every((b) => b.disabled)`));
     invalidState = await state();
     await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(invalidState))})`);
@@ -213,11 +222,46 @@ app.whenReady().then(async () => {
     legacyInvalid.graphs.forEach((g, i) => { g.spec = validProject.graphs[i].spec; });
     await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(legacyInvalid))})`);
     ok(fixture.name + ' is also invalidated when reopening a legacy stale graph', (await state()).graphs.every((g) => g.spec.unavailable && g.spec.opts.sig.length === 0));
-    await click('#nav-tables .nav-item');
+    await click('#nav-tables .nav-item[data-view="data"]');
     const recovered = fixture.groups.length === 3 ? [editedA, editedB, []] : [editedA, editedB];
     await pasteGroups(recovered);
     const recoveredState = await state();
     ok(fixture.name + ' recovers fresh inference when valid data return', recoveredState.graphs.every((g) => !g.spec.unavailable && g.spec.opts.sig.length === 1) && recoveredState.results[0].spec.welch === true && recoveredState.results[1].spec.welch === false && near(recoveredState.graphs[0].spec.opts.sig[0].p, T.unpairedT(editedA, editedB, true).p));
+  }
+  await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(validProject))})`);
+
+  // Direction and variance choices must survive invalid data together.
+  for (const alternative of ['greater', 'less']) for (const choice of ['welch', 'student']) {
+    await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(validProject))})`);
+    await click('#nav-tables .nav-item[data-view="data"]');
+    await openAnalyze();
+    await choose(choice);
+    await run(`(() => {
+      const select = document.querySelector('#analyze-alternative');
+      select.value = ${JSON.stringify(alternative)};
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await click('#analyze-go');
+    const directionalProject = await state(), result = directionalProject.results.at(-1);
+    const graph = directionalProject.graphs.find((g) => g.id === result.graphId);
+    const label = choice + ' ' + alternative;
+    ok(label + ' calculates the directional mean test alongside a separate variance test', near(graph.spec.opts.sig[0].p, T.unpairedT(editedA, editedB, choice === 'welch', alternative).p) && result.spec.alternative === alternative && result.spec.welch === (choice === 'welch') && near(+await run(`document.querySelector('.variance-check').dataset.p`), T.brownForsythe([editedA, editedB]).p));
+    await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(directionalProject))})`);
+    ok(label + ' survives a valid project round trip', JSON.stringify(await state()) === JSON.stringify(directionalProject) && await run(`document.querySelector('.hypothesis-note').textContent.includes(${JSON.stringify('one-tailed, ' + alternative)})`));
+    await click('#nav-tables .nav-item[data-view="data"]');
+    await pasteGroups([editedA, []]);
+    await click('.nav-item[data-view="result"][data-id="' + result.id + '"]');
+    ok(label + ' reports unavailable inference without losing its selected tail', await run(`!!document.querySelector('.unpaired-unavailable') && !!document.querySelector('.variance-check') && document.querySelector('.result-card').textContent.includes(${JSON.stringify('one-tailed, ' + alternative)}) && !document.querySelector('.verdict.ns, .verdict.sig')`));
+    await click('.nav-item[data-view="graph"][data-id="' + graph.id + '"]');
+    const invalidProject = await state();
+    await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(invalidProject))})`);
+    ok(label + ' keeps invalid graphs unavailable after reopening', await run(`!!document.querySelector('.graph-unavailable') && !window.StatLab.hasActiveGraph() && window.StatLab.activeGraphSVG() === null`) && (await state()).graphs.find((g) => g.id === graph.id).spec.opts.sig.length === 0);
+    await click('#nav-tables .nav-item[data-view="data"]');
+    await pasteGroups([editedB, editedA]);
+    const recovered = await state();
+    const recoveredResult = recovered.results.find((r) => r.id === result.id), recoveredGraph = recovered.graphs.find((g) => g.id === graph.id);
+    const expected = T.unpairedT(editedB, editedA, choice === 'welch', alternative);
+    ok(label + ' recovers the original choices with fresh reverse-effect inference', recoveredResult.spec.alternative === alternative && recoveredResult.spec.welch === (choice === 'welch') && !recoveredGraph.spec.unavailable && near(recoveredGraph.spec.opts.sig[0].p, expected.p) && recoveredGraph.spec.opts.sig[0].sig === (alternative === 'greater'));
   }
   await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(validProject))})`);
 
@@ -262,7 +306,7 @@ app.whenReady().then(async () => {
     await click('#analyze-go');
     ok(fixture.name + ' saves an honest unavailable result without a numeric p-value', await run(`document.querySelector('.variance-status').textContent.includes('unavailable') && !document.querySelector('.variance-check .apa')`));
     for (const choice of ['welch', 'student']) {
-      await click('#nav-tables .nav-item', (await state()).tables.length - 1);
+      await click('#nav-tables .nav-item[data-view="data"]', (await state()).tables.length - 1);
       await openAnalyze();
       await choose(choice);
       const before = await state();
@@ -285,7 +329,7 @@ app.whenReady().then(async () => {
   ok('result verdict and variance summary both preserve labels without markup', await run(`document.querySelector('.verdict').textContent.includes(${JSON.stringify(label)}) && !document.querySelector('.result-card em')`));
 
   win.setContentSize(900, 600);
-  await click('#nav-tables .nav-item', (await state()).tables.length - 1);
+  await click('#nav-tables .nav-item[data-view="data"]', (await state()).tables.length - 1);
   await openAnalyze();
   ok('new controls fit the minimum supported window width', await run(`(() => {
     const modal = document.querySelector('#modal-analyze .modal');

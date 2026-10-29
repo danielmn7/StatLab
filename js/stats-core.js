@@ -194,6 +194,21 @@ const StatCore = (function () {
     const x = df / (df + t * t);
     return betai(df / 2, 0.5, x);
   }
+  function validateAlternative(alternative) {
+    if (alternative !== 'two-sided' && alternative !== 'greater' && alternative !== 'less') {
+      throw new RangeError('alternative must be "two-sided", "greater", or "less"');
+    }
+  }
+  // Signed tails: compute the small tail directly, not 1 - CDF(t), so large
+  // positive t values retain their upper-tail probability without cancellation.
+  function studentTP(t, df, alternative = 'two-sided') {
+    validateAlternative(alternative);
+    const twoTail = studentTtwoTailP(t, df);
+    if (alternative === 'two-sided') return twoTail;
+    const half = twoTail / 2;
+    const smallTail = alternative === 'greater' ? t >= 0 : t <= 0;
+    return smallTail ? half : 1 - half;
+  }
   // Inverse t (two-sided critical value at given upper-tail prob)
   function studentTinv(p, df) {
     // p is the cumulative probability
@@ -362,7 +377,7 @@ const StatCore = (function () {
     gammaln, gammafn, factorialln, combinationln,
     gammp, gammq, erf, erfc, betai,
     normalPDF, normalCDF, normalInv,
-    studentTcdf, studentTtwoTailP, studentTinv,
+    studentTcdf, studentTtwoTailP, studentTP, studentTinv, validateAlternative,
     fDistP, fDistCDF, chiSquareP, chiSquareCDF,
     ptukey, tukeyP, tukeyInv,
   };
