@@ -49,6 +49,7 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
   app.setPath('sessionData', profile);
   let win, saveDialogs = 0, saveDestination = null, openPath = original, exercising = false;
   const errors = [];
+  const inputWindows = new WeakSet();
   dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [openPath] });
   dialog.showSaveDialog = async () => { saveDialogs++; return { canceled: !saveDestination, filePath: saveDestination }; };
   dialog.showErrorBox = (title, message) => errors.push(title + ': ' + message);
@@ -70,6 +71,37 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
       input.value = ${JSON.stringify(text)};
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
+  }
+  async function replaceFirstCell(text, commit = true) {
+    await run(`document.querySelector('#nav-tables .nav-item[data-view="data"]').click()`);
+    const before = (await state()).tables[0].rows;
+    if (!inputWindows.has(win)) { win.webContents.debugger.attach('1.3'); inputWindows.add(win); }
+    const point = await run(`(() => {
+      const cell = document.querySelector('td.dcell[data-r="0"][data-c="0"]');
+      cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const rect = cell.getBoundingClientRect();
+      return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+    })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type, button: 'left', clickCount: 1, ...point });
+    }
+    let prefix = '';
+    for (const ch of text) {
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch });
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+      prefix += ch;
+      assert.deepStrictEqual(await run(`(() => {
+        const input = document.querySelector('input.celledit');
+        return { value: input.value, start: input.selectionStart, end: input.selectionEnd };
+      })()`), { value: prefix, start: prefix.length, end: prefix.length }, 'native replacement keeps its exact string and caret order');
+    }
+    assert.deepStrictEqual((await state()).tables[0].rows, before, 'a replacement draft remains uncommitted until Enter or explicit Save');
+    if (commit) {
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+      await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', windowsVirtualKeyCode: 13 });
+      const expected = before.map((row) => row.slice()); expected[0][0] = text;
+      assert.deepStrictEqual((await state()).tables[0].rows, expected, 'committing a replacement changes only the targeted raw cell');
+    }
   }
   async function waitForAutosave() {
     await waitFor(async () => run(`(() => {
@@ -93,7 +125,11 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
       if (!exercising) { exercising = true; exercise().catch(fail); }
     });
   });
-  const fail = (error) => { console.error(error); app.exit(1); };
+  const fail = (error) => {
+    console.error(error);
+    errors.forEach((message) => console.error('Renderer/native error:', message));
+    app.exit(1);
+  };
   const timeout = setTimeout(() => fail(new Error('Desktop session test timed out')), 25000);
   async function restore() {
     await waitFor(async () => run(`!document.querySelector('#modal-restore').hidden`), 'Restore prompt');
@@ -142,9 +178,11 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
     const oldJSON = await run('window.StatLab.getStateJSON()');
     fs.mkdirSync(path.dirname(copy));
     saveDestination = copy;
+    await replaceFirstCell('9.87e-6', false);
     await run('window.desktop.saveProjectAs()');
     saveDestination = null;
     ok('Save As checkpoints the exact new directory even with an identical basename', record().filePath === copy && fs.existsSync(copy));
+    ok('Save As includes the visible replacement draft without modifying the original file', JSON.parse(fs.readFileSync(copy, 'utf8')).tables[0].rows[0][0] === '9.87e-6' && JSON.parse(fs.readFileSync(original, 'utf8')).tables[0].rows[0][0] === '-12.34');
     const saved = fs.readFileSync(recovery, 'utf8');
     ok('an earlier workspace checkpoint cannot replace the new association', await run(`window.desktop.checkpointSession(${JSON.stringify(oldJSON)}, ${JSON.stringify(oldToken)})`) === false && fs.readFileSync(recovery, 'utf8') === saved);
     const portable = JSON.parse(fs.readFileSync(copy, 'utf8'));
@@ -197,8 +235,10 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
       await run('window.desktop.openProject()');
       ok('native Open shows the source filename', await run(`document.querySelector('#project-file').textContent === 'original.statlab.json'`));
       ok('native Open checkpoints the association before any edit', record().filePath === original && record().state.tables.length === 1);
+      await replaceFirstCell('1234');
       await notes('Recovered edit before restart');
       await waitForAutosave();
+      ok('native typed replacement reaches paired recovery in the correct order', record().state.tables[0].rows[0][0] === '1234');
       ok('autosave does not implicitly overwrite the source project', JSON.parse(fs.readFileSync(original, 'utf8')).tables[0].notes !== 'Recovered edit before restart');
     } else if (phase === 'restore') {
       await waitFor(async () => run(`!document.querySelector('#modal-restore').hidden`), 'Restore prompt');
@@ -213,11 +253,17 @@ if (!process.env.STATLAB_SESSION_TEST_PHASE) {
       ok('recovery summary names the file without overflowing the dialog', await run(`(() => { const summary = document.querySelector('#restore-summary'); return summary.textContent.includes('original.statlab.json') && summary.scrollWidth <= summary.clientWidth && document.querySelector('#restore-yes').checkVisibility(); })()`));
       await restore();
       await waitFor(async () => (await state()).tables[0]?.notes === 'Recovered edit before restart', 'restored data');
+      ok('a full app restart preserves the exact typed replacement', (await state()).tables[0].rows[0][0] === '1234');
       ok('Restore itself does not overwrite the project file', fs.readFileSync(original, 'utf8') === before);
       await notes('Recovered edit, then saved after restart');
-      await run('window.desktop.saveProject()');
+      await replaceFirstCell('-12.34', false);
+      const fileMenu = Menu.getApplicationMenu().items.find((item) => item.label === 'File').submenu;
+      fileMenu.items.find((item) => item.label === 'Save Project').click();
+      await waitFor(() => JSON.parse(fs.readFileSync(original, 'utf8')).tables[0].rows[0][0] === '-12.34', 'native menu saves the visible replacement');
+      await waitForAutosave();
       ok('Save after a full restart does not ask for a new destination', saveDialogs === 0);
       ok('Save after Restore updates the original JSON file', JSON.parse(fs.readFileSync(original, 'utf8')).tables[0].notes === 'Recovered edit, then saved after restart');
+      ok('native Save commits the visible replacement draft into the original file', JSON.parse(fs.readFileSync(original, 'utf8')).tables[0].rows[0][0] === '-12.34' && (await state()).tables[0].rows[0][0] === '-12.34' && await run(`!document.querySelector('input.celledit')`));
       ok('Restore reinstates the project filename and title', await run(`document.querySelector('#project-file').textContent === 'original.statlab.json'`) && win.getTitle().includes('original.statlab.json'));
       ok('ordinary Save creates no extra project file', fs.readdirSync(temp).filter((file) => file.endsWith('.json')).length === 1);
       await saveAsChecks();

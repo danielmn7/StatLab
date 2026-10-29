@@ -201,6 +201,9 @@ session** recovers your latest autosaved workspace and reconnects its project
 file; restoring does not itself overwrite the file. **Start fresh** clears the
 active destination while keeping the previous recovery until you make changes.
 
+Explicit **Save** and **Save As** also commit the value currently being typed in
+a data cell, including saves invoked from the native menu or keyboard shortcut.
+
 If the original file was moved/deleted, or the recovered session predates file
 association tracking, your work still restores but needs **Save As** once. Dropping
 a JSON project also requires **Save As**, so it cannot overwrite a previously open

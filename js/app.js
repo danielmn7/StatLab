@@ -2374,6 +2374,13 @@
   // API surface for the Electron desktop shell (native menu → these calls)
   window.StatLab = {
     getStateJSON: () => JSON.stringify(snapshot(), null, 2),
+    prepareSaveJSON: () => {
+      // Native menu/shortcut saves do not necessarily blur the grid editor.
+      // Commit its visible draft for explicit saves, not routine snapshots.
+      const editor = $('input.celledit');
+      if (editor) editor.blur();
+      return PROJECT_JSON();
+    },
     stageRecoveryCheckpoint,
     loadStateJSON: (json) => { try { restoreSnapshot(JSON.parse(json)); saveState(); return true; } catch (e) { return false; } },
     // Called by the desktop shell after a native save/open to show the file name.

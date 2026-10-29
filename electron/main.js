@@ -135,7 +135,7 @@ async function openProject(context) {
 // Save to the current project file, or fall back to "Save As" when there isn't
 // one yet. Pass forceDialog=true to always prompt for a new location.
 async function saveProject(forceDialog, context) {
-  let json = await runProject('window.StatLab.getStateJSON()', context);
+  let json = await runProject('window.StatLab.prepareSaveJSON()', context);
   let filePath = currentProjectPath;
   if (filePath && !existingProject(filePath)) {
     await setCurrentProject(null, context);
@@ -150,7 +150,7 @@ async function saveProject(forceDialog, context) {
     if (res.canceled || !res.filePath) return;
     assertContext(context);
     filePath = res.filePath;
-    json = await runProject('window.StatLab.getStateJSON()', context);
+    json = await runProject('window.StatLab.prepareSaveJSON()', context);
   }
   try {
     fs.writeFileSync(filePath, json, 'utf8');
