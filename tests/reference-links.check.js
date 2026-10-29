@@ -3,13 +3,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { createRequire } = require('module');
 const Guidance = require('../js/guidance.js');
 let handler;
 const opened = [];
 const electron = {
   app: { whenReady: () => ({ then: (fn) => fn() }), on: () => {} },
   BrowserWindow: class {
-    constructor() { this.webContents = { setWindowOpenHandler: (fn) => { handler = fn; } }; }
+    constructor() { this.webContents = { setWindowOpenHandler: (fn) => { handler = fn; }, on: () => {} }; }
     loadFile() {}
   },
   Menu: { buildFromTemplate: (template) => template, setApplicationMenu: () => {} },
@@ -17,8 +18,9 @@ const electron = {
   shell: { openExternal: (url) => { opened.push(url); } },
 };
 const filename = path.join(__dirname, '..', 'electron', 'main.js');
+const requireMain = createRequire(filename);
 vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-  require: (name) => name === 'electron' ? electron : require(name),
+  require: (name) => name === 'electron' ? electron : requireMain(name),
   __dirname: path.dirname(filename), process,
 }, { filename });
 assert.strictEqual(typeof handler, 'function', 'desktop installs an external-reference policy');

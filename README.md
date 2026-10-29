@@ -194,8 +194,26 @@ and the **font size and bold weight of titles and axis labels** (tick numbers sc
 along but stay smaller so they never crowd the plot), then export to **SVG** or **PNG**.
 
 ### Saving
-Your work autosaves to the browser. Use **Save** to download a `.json` project file
-and **Open** to load one back (portable across machines).
+Your work autosaves locally for session recovery. In the desktop app, **Open**
+links a `.json` project to its original location, **Save** updates that file, and
+**Save As** always asks for a destination. After restarting, **Restore previous
+session** recovers your latest autosaved workspace and reconnects its project
+file; restoring does not itself overwrite the file. **Start fresh** clears the
+active destination while keeping the previous recovery until you make changes.
+
+If the original file was moved/deleted, or the recovered session predates file
+association tracking, your work still restores but needs **Save As** once. Dropping
+a JSON project also requires **Save As**, so it cannot overwrite a previously open
+project by accident. Absolute local paths are kept in desktop recovery metadata,
+never in portable project JSON.
+
+If a native recovery write fails, a newer local backup is recovered without
+reusing an older file link. Choose **Save As** to confirm its destination; this
+prevents stale recovery data from overwriting a newer explicitly saved project.
+
+In a browser, **Save** updates a file only while a writable file handle is
+available; otherwise it opens **Save As** or downloads a JSON copy. Use **Open** to
+load a project back. Project files remain portable across machines.
 
 ### Opening GraphPad Prism files
 **Open Prism** (or drag a `.prism` file onto the window) reads a modern GraphPad
@@ -227,7 +245,7 @@ Run the checks (requires Node and Python):
 ```bash
 node tests/check.js         # stats tests vs an independent Python oracle
 node tests/prism.check.js   # .prism import mapping (pure Node, no Python)
-npm run test:ui             # nested sidebar, rename, hypothesis options, and persistence (requires Electron/display)
+npm run test:ui             # renderer checks and native project recovery across app restarts (requires Electron/display)
 ```
 
 ## Data formats

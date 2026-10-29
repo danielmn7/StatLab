@@ -53,6 +53,7 @@
     counter: 1,
     projectFileName: null,  // display name of the open project file, or null when unsaved
     projectFileHandle: null, // File System Access handle (browser) so Save can overwrite
+    projectSessionToken: null, // native workspace identity, never included in project JSON
   };
   function activeObj() {
     if (!App.active) return null;
@@ -1913,7 +1914,17 @@
       if (/\.prism$/i.test(f.name)) importPrismFile(f);
       else if (/\.json$/i.test(f.name)) {
         const fr = new FileReader();
-        fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); renderNavigator(); renderContent(); saveState(); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
+        fr.onload = async () => {
+          try {
+            if (window.desktop) {
+              if (!await window.desktop.replaceProject(fr.result)) throw new Error('Invalid project');
+            } else {
+              restoreSnapshot(JSON.parse(fr.result));
+              setProjectFile(f.name, null); saveState();
+            }
+            toast('Project opened — use Save As to choose its destination');
+          } catch (err) { toast('Invalid project file'); }
+        };
         fr.readAsText(f);
       }
     });
@@ -1982,7 +1993,23 @@
   // ---------- persistence ----------
   let _saveTimer = null;
   function saveState() { clearTimeout(_saveTimer); _saveTimer = setTimeout(persist, 400); }
-  function persist() { try { localStorage.setItem('statlab_state', JSON.stringify(snapshot())); } catch (e) { /* storage full or unavailable */ } }
+  async function persist() {
+    const json = JSON.stringify(snapshot());
+    if (window.desktop && App.projectSessionToken) {
+      try { await window.desktop.checkpointSession(json, App.projectSessionToken); }
+      catch (e) { toast('Recovery autosave failed — use Save to protect your work'); }
+    } else {
+      try { localStorage.setItem('statlab_state', json); } catch (e) { /* storage full or unavailable */ }
+    }
+  }
+  function stageRecoveryCheckpoint(json, checkpointId, baseCheckpointId) {
+    try {
+      const state = JSON.parse(json);
+      state._desktopRecovery = { checkpointId, baseCheckpointId };
+      localStorage.setItem('statlab_state', JSON.stringify(state));
+      return true;
+    } catch (e) { return false; } // Native recovery can still succeed if browser storage is full.
+  }
   function snapshot() {
     return {
       v: 1, counter: App.counter,
@@ -1994,6 +2021,24 @@
     };
   }
   function restoreSnapshot(s) {
+    if (!s || !Array.isArray(s.tables) || (s.results != null && !Array.isArray(s.results)) || (s.graphs != null && !Array.isArray(s.graphs))) {
+      throw new Error('Invalid project structure');
+    }
+    // Recomputing results needs the candidate tables/graphs in App. Roll back
+    // both state and rendering if any part of loading fails, so a rejected file
+    // cannot leave its data attached to the previous project's save destination.
+    const previous = {
+      counter: App.counter, tables: App.tables, results: App.results, graphs: App.graphs,
+      active: App.active, navCollapsed: App.navCollapsed,
+    };
+    try { restoreSnapshotData(s); renderNavigator(); renderContent(); }
+    catch (e) {
+      Object.assign(App, previous);
+      renderNavigator(); renderContent();
+      throw e;
+    }
+  }
+  function restoreSnapshotData(s) {
     App.counter = s.counter || 1;
     App.tables = (s.tables || []).map(D.fromJSON);
     App.graphs = (s.graphs || []).map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec }));
@@ -2032,8 +2077,17 @@
     if (!raw) return null;
     try {
       const s = JSON.parse(raw);
-      if (!s.tables || !s.tables.length) return null;
-      return { state: s, tables: s.tables.length, results: (s.results || []).length, graphs: (s.graphs || []).length };
+      if (!s || !Array.isArray(s.tables) || (s.results != null && !Array.isArray(s.results)) || (s.graphs != null && !Array.isArray(s.graphs))) return null;
+      const metadata = s._desktopRecovery;
+      const checkpoint = metadata && typeof metadata.checkpointId === 'string' &&
+        (metadata.baseCheckpointId === null || typeof metadata.baseCheckpointId === 'string') ? metadata : null;
+      // An empty but stamped backup may be newer because the user deleted the
+      // last table. It must still supersede an older, nonempty native record.
+      if (!s.tables.length && !(s.results || []).length && !(s.graphs || []).length && !checkpoint) return null;
+      return {
+        state: s, tables: s.tables.length, results: (s.results || []).length, graphs: (s.graphs || []).length,
+        checkpoint,
+      };
     } catch (e) { return null; }
   }
   // Startup prompt: restore the previous autosaved session, or begin with a clean workspace.
@@ -2045,10 +2099,31 @@
     if (info.graphs) parts.push(plural(info.graphs, 'graph'));
     if (info.results) parts.push(plural(info.results, 'result'));
     const summary = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0];
-    $('#restore-summary').textContent = 'Your last session has ' + summary + '.';
+    $('#restore-summary').textContent = 'Your last session' + (info.projectName ? ' in ' + info.projectName : '') + ' has ' + summary + '.';
+    if (info.detachedFallback) $('#restore-summary').textContent += ' A newer local backup is available, but its file link could not be confirmed. Restore it, then use Save As.';
     const modal = $('#modal-restore');
-    $('#restore-yes').onclick = () => { restoreSnapshot(info.state); renderNavigator(); renderContent(); modal.hidden = true; };
-    $('#restore-fresh').onclick = () => { modal.hidden = true; toast('Started fresh — your previous session is still saved'); };
+    const choose = (action) => async () => {
+      $('#restore-yes').disabled = $('#restore-fresh').disabled = true;
+      try { await action(); }
+      catch (e) { toast('Could not restore the session. Your recovery data is still saved.'); }
+      finally { $('#restore-yes').disabled = $('#restore-fresh').disabled = false; }
+    };
+    $('#restore-yes').onclick = choose(async () => {
+      if (window.desktop) {
+        const result = info.recoveryId ? await window.desktop.restoreSession(info.recoveryId)
+          : { restored: await window.desktop.replaceProject(JSON.stringify(info.state)) };
+        if (!result.restored) throw new Error('Restore failed');
+        if (result.missing) toast('Original project file not found. Your work is restored — use Save As.');
+        else if (info.detachedFallback) toast('Newer local backup restored — use Save As to choose its destination');
+      } else { restoreSnapshot(info.state); setProjectFile(null, null); }
+      modal.hidden = true;
+    });
+    $('#restore-fresh').onclick = choose(async () => {
+      if (window.desktop) await window.desktop.startFresh();
+      else setProjectFile(null, null);
+      modal.hidden = true;
+      toast('Started fresh — your previous session is still saved');
+    });
     modal.hidden = false;
   }
   // Reflect the current project file name in the toolbar and window title.
@@ -2078,7 +2153,7 @@
   // file, prompting only when there isn't one). In the browser, overwrite the
   // open file via its handle, falling back to Save As when there is none.
   async function saveProject() {
-    if (window.desktop) { window.desktop.saveProject(); return; }
+    if (window.desktop) return window.desktop.saveProject();
     if (App.projectFileHandle && window.showSaveFilePicker) {
       try { await writeToHandle(App.projectFileHandle, PROJECT_JSON()); toast('Saved ' + App.projectFileName); return; }
       catch (e) { /* handle went stale — fall through to Save As */ }
@@ -2088,7 +2163,7 @@
 
   // Save As: always choose a new destination.
   async function saveProjectAs() {
-    if (window.desktop) { window.desktop.saveProjectAs(); return; }
+    if (window.desktop) return window.desktop.saveProjectAs();
     const text = PROJECT_JSON();
     if (window.showSaveFilePicker) {
       let handle;
@@ -2104,14 +2179,14 @@
   }
 
   async function openProjectFile() {
-    if (window.desktop) { window.desktop.openProject(); return; }
+    if (window.desktop) return window.desktop.openProject();
     if (window.showOpenFilePicker) {
       let handle;
       try { [handle] = await window.showOpenFilePicker({ types: FS_TYPES, multiple: false }); }
       catch (e) { return; } // user dismissed the picker
       try {
         const text = await (await handle.getFile()).text();
-        restoreSnapshot(JSON.parse(text)); renderNavigator(); renderContent(); saveState();
+        restoreSnapshot(JSON.parse(text)); saveState();
         setProjectFile(handle.name, handle); toast('Opened ' + handle.name);
       } catch (err) { toast('Invalid project file'); }
       return;
@@ -2121,7 +2196,7 @@
     inp.addEventListener('change', (e) => {
       const f = e.target.files[0]; if (!f) return;
       const fr = new FileReader();
-      fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); renderNavigator(); renderContent(); saveState(); setProjectFile(f.name, null); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
+      fr.onload = () => { try { restoreSnapshot(JSON.parse(fr.result)); saveState(); setProjectFile(f.name, null); toast('Project opened'); } catch (err) { toast('Invalid project file'); } };
       fr.readAsText(f);
     });
     inp.click();
@@ -2242,7 +2317,7 @@
   }
 
   // ---------- init ----------
-  function init() {
+  async function init() {
     $('#btn-new').addEventListener('click', newTable);
     $('#btn-import').addEventListener('click', openImport);
     $('#btn-example').addEventListener('click', () => showExampleMenu());
@@ -2260,7 +2335,23 @@
     $$('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; }));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $$('.modal-backdrop').forEach((m) => m.hidden = true); });
     initDragDrop();
-    const saved = peekSavedState();
+    let saved = peekSavedState();
+    if (window.desktop) {
+      try {
+        const session = await window.desktop.getSession();
+        const record = session.recovery;
+        const fallback = saved && saved.checkpoint;
+        const newerFallback = record && fallback && fallback.baseCheckpointId === record.checkpointId && fallback.checkpointId !== record.checkpointId;
+        if (newerFallback) saved.detachedFallback = true;
+        else if (record) {
+          const s = record.state;
+          saved = s.tables.length || s.results.length || s.graphs.length ? {
+            state: s, tables: s.tables.length, results: s.results.length, graphs: s.graphs.length,
+            recoveryId: record.id, projectName: record.name,
+          } : null;
+        }
+      } catch (e) { toast('Desktop recovery unavailable — any restored work will need Save As'); }
+    }
     renderNavigator(); renderContent(); renderProjectFile();
     if (saved) showRestorePrompt(saved);
   }
@@ -2281,9 +2372,14 @@
   // API surface for the Electron desktop shell (native menu → these calls)
   window.StatLab = {
     getStateJSON: () => JSON.stringify(snapshot(), null, 2),
-    loadStateJSON: (json) => { try { restoreSnapshot(JSON.parse(json)); renderNavigator(); renderContent(); saveState(); return true; } catch (e) { return false; } },
+    stageRecoveryCheckpoint,
+    loadStateJSON: (json) => { try { restoreSnapshot(JSON.parse(json)); saveState(); return true; } catch (e) { return false; } },
     // Called by the desktop shell after a native save/open to show the file name.
-    setProjectFile: (name) => { setProjectFile(name); },
+    setProjectFile: (name, token) => {
+      App.projectSessionToken = token;
+      setProjectFile(name, null);
+      $('#modal-restore').hidden = true;
+    },
     importText: (text, type) => {
       const parsed = D.parseDelimited(text);
       const useHeader = D.looksLikeHeader(parsed.rows[0] || []);
