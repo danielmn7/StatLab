@@ -65,6 +65,24 @@ function insideSlots(svg, pts) {
   const slots = slotsOf(svg);
   return slots.length > 0 && pts.every((p) => p.x > slots[p.g].left && p.x < slots[p.g].left + slots[p.g].width);
 }
+// Error-bar strokes (stems and caps, 1.3 px) drawn inside the plot, as segments. The
+// dot plot's 2-px mean line is not an error bar and is left out.
+function whiskersOf(svg) {
+  const plot = svg.match(/<g clip-path="url\(#pc_\d+\)">([\s\S]*?)<\/g>/)[1];
+  return Array.from(plot.matchAll(/<line x1="([-\d.e]+)" y1="([-\d.e]+)" x2="([-\d.e]+)" y2="([-\d.e]+)" stroke="#1c2733" stroke-width="1\.3"\/>/g),
+    (m) => ({ x1: +m[1], y1: +m[2], x2: +m[3], y2: +m[4] }));
+}
+function segmentDistance(p, s) {
+  const dx = s.x2 - s.x1, dy = s.y2 - s.y1, len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((p.x - s.x1) * dx + (p.y - s.y1) * dy) / len)) : 0;
+  return Math.hypot(p.x - (s.x1 + t * dx), p.y - (s.y1 + t * dy));
+}
+// Smallest distance from any point centre to any error-bar stroke centre line.
+const whiskerGap = (svg, pts) => { const bars = whiskersOf(svg); return Math.min(...pts.map((p) => Math.min(...bars.map((s) => segmentDistance(p, s))))); };
+// Centre-to-stroke distance at which a marker of radius r keeps the layout's 1.5-px
+// gap from a whisker: its radius, its 0.8-px outline, and half the 1.3-px stroke.
+// Checks allow 0.01 px for the 2-decimal data-px/data-py rounding.
+const clearOfWhisker = (r) => r + 0.4 + 0.65 + 1.5;
 const crowded = [
   { name: 'Ctrl', values: [10, 10.05, 10.1, 10.02, 12, 9.98, 10.07, 14, 10.03] },
   { name: 'Drug', values: [20, 20, 20, 20.1, 19.9, 25, 15, 20.05] },
@@ -81,13 +99,17 @@ ok('identical values stay at the same height (y encodes the value)', (() => {
   return ys.length === 3 && ys.every((y) => y === ys[0]);
 })());
 ok('swarmed points stay inside their own category slot', insideSlots(dotSvg, dotPts) && insideSlots(barSvg, barPts));
-ok('points whose jittered spot is already clear do not move', (() => {
+ok('points whose jittered spot is already clear (of points and the error bar) do not move', (() => {
   const { left, width: slot } = slotsOf(dotSvg)[2], spread = Math.min(46, slot * 0.5), cx = left + slot / 2;
-  let seed = 2 * 131 + 17;
+  const bars = whiskersOf(dotSvg);
+  let seed = 2 * 131 + 17, kept = 0;
   return dotPts.filter((p) => p.g === 2).every((p) => {
     seed = (seed * 9301 + 49297) % 233280;
-    return Math.abs(p.x - (cx + (seed / 233280 - 0.5) * spread)) < 0.01;
-  });
+    const jx = cx + (seed / 233280 - 0.5) * spread;
+    if (Math.min(...bars.map((s) => segmentDistance({ x: jx, y: p.y }, s))) < clearOfWhisker(3.6)) return true;   // on the error bar: must move
+    kept++;
+    return Math.abs(p.x - jx) < 0.01;
+  }) && kept >= 5;
 })());
 ok('isolated points keep their jitter spot even when their group has a packed cluster', (() => {
   // Ctrl's ~10 cluster is too wide for the usual cloud, so the group is packed; 12 and 14 are far from it.
@@ -108,16 +130,68 @@ ok('swarmOffsets packs exact ties side by side within the allowed width', (() =>
   const xs = Charts.swarmOffsets([0, 1, 2, 3, 4].map(() => ({ y: 100, pref: 0, r: 4 })), 30, 30).sort((a, b) => a - b);
   return xs.every((x, k) => k === 0 || x - xs[k - 1] >= 8.8 - 1e-9) && xs[0] >= -30 && xs[xs.length - 1] <= 30;
 })());
-ok('a very dense column stays finite, inside its slot and fast', (() => {
+ok('a very dense column stays finite, inside its slot, off its error bar and fast', (() => {
+  // far too many ties to keep apart: markers may overlap each other, but not the whisker
   const dense = [{ name: 'Dense', values: Array.from({ length: 1200 }, (_, k) => 50 + (k % 5) * 0.001) }, { name: 'Other', values: [1, 2, 3] }];
   const t0 = Date.now();
   const svg = Charts.dotPlot(dense, {}), pts = pointsOf(svg);
-  return Date.now() - t0 < 2000 && pts.length === 1203 && pts.every((p) => isFinite(p.x)) && insideSlots(svg, pts);
+  return Date.now() - t0 < 2000 && pts.length === 1203 && pts.every((p) => isFinite(p.x)) && insideSlots(svg, pts) &&
+    whiskerGap(svg, pts) >= clearOfWhisker(3.6) - 0.01;
 })());
 ok('box plot spreads tied outliers instead of stacking them', (() => {
   const svg = Charts.boxPlot([{ name: 'A', values: [10, 11, 12, 11, 10, 12, 11, 10, 11, 12, 11, 10, 40, 40, 40] }], {});
   const cx = Array.from(svg.matchAll(/class="box-outlier" cx="([-\d.]+)"/g), (m) => +m[1]).sort((a, b) => a - b);
   return cx.length === 3 && cx[1] - cx[0] >= 7.2 && cx[2] - cx[1] >= 7.2;
+})());
+
+// Points beside an error bar slide sideways off the whisker instead of being drawn
+// across it (bar charts used to fade such points to 32% opacity instead).
+ok('bar chart points sit beside the error bar instead of across it', whiskersOf(barSvg).length === 12 && whiskerGap(barSvg, barPts) >= clearOfWhisker(3.1) - 0.01);
+ok('bar chart points stay fully opaque (none faded behind the error bar)', !/\sopacity="/.test(barSvg));
+ok('dot plot points sit beside the error bar instead of across it', whiskersOf(dotSvg).length === 9 && whiskerGap(dotSvg, dotPts) >= clearOfWhisker(3.6) - 0.01);
+ok('error-bar clearance holds for every error type and for wide symbols', ['sd', 'sem', 'ci95'].every((errorType) => {
+  const markers = ['diamond', 'cross', 'square'];
+  const bar = Charts.barChart(crowded, { showPoints: true, errorType, markers }), dot = Charts.dotPlot(crowded, { errorType, markers });
+  return [[bar, 3.1], [dot, 3.6]].every(([svg, r]) => {
+    const pts = pointsOf(svg);
+    return pts.every((p) => {
+      const R = r * [1.4, 1.3, 1.12][p.g];
+      return whiskerGap(svg, [p]) >= clearOfWhisker(R) - 0.01;
+    }) && insideSlots(svg, pts) && closestPair(pts) >= 2 * r;
+  });
+}));
+ok('one-sided error bars only keep points off the half that is drawn', (() => {
+  // mean 20.2 ± SD 6.3: replicates 0 and 5 (15, 16) lie on the lower half, and their
+  // jitter puts them on the centre line, which is clear when only the upper half is drawn
+  const g = [{ name: 'A', values: [15, 26, 10, 30, 24, 16, 12, 28, 20, 22, 18, 21] }];
+  const one = Charts.barChart(g, { showPoints: true, errorType: 'sd', errorBothSides: false });
+  const both = Charts.barChart(g, { showPoints: true, errorType: 'sd' });
+  const offCentre = (svg, i) => { const s = slotsOf(svg)[0]; return Math.abs(pointsOf(svg).find((p) => p.i === i).x - (s.left + s.width / 2)); };
+  return whiskersOf(one).length === 2 && whiskerGap(one, pointsOf(one)) >= clearOfWhisker(3.1) - 0.01 &&
+    [0, 5].every((i) => offCentre(one, i) < 3 && offCentre(both, i) >= clearOfWhisker(3.1) - 0.01);
+})());
+ok('swarmOffsets keeps tied points off a given error bar', (() => {
+  const bar = { y0: 80, y1: 120, caps: [80, 120], capW: 7, hw: 0.65 };
+  const onStem = Charts.swarmOffsets([0, 1, 2, 3].map(() => ({ y: 100, pref: 0, r: 4 })), 30, 30, bar).sort((a, b) => a - b);
+  const onCap = Charts.swarmOffsets([0, 1, 2].map(() => ({ y: 80, pref: 0, r: 4 })), 30, 30, bar);
+  return onStem.every((x, k) => Math.abs(x) >= 4 + 0.65 + 1.5 - 1e-9 && (k === 0 || x - onStem[k - 1] >= 8.8 - 1e-9)) &&
+    onCap.every((x) => Math.abs(x) >= 7 + 4 + 0.65 + 1.5 - 1e-9 && Math.abs(x) <= 30);
+})());
+ok('a slot too narrow to clear the whisker keeps points inside it, with the whisker drawn over them', (() => {
+  const many = Array.from({ length: 30 }, (_, k) => ({ name: 'G' + k, values: [10, 10.2, 9.8, 10.1, 9.9, 10.05] }));
+  const svg = Charts.barChart(many, { showPoints: true }), pts = pointsOf(svg);
+  const plot = svg.match(/<g clip-path="url\(#pc_\d+\)">([\s\S]*?)<\/g>/)[1];
+  const columns = plot.split(/(?=<rect [^>]*rx="1\.5")/).filter((c) => c.includes('rx="1.5"'));
+  return pts.length === 180 && pts.every((p) => isFinite(p.x)) && insideSlots(svg, pts) && columns.length === 30 &&
+    columns.every((c) => c.lastIndexOf('class="data-point"') < c.indexOf('stroke-width="1.3"'));
+})());
+ok('error bars that run below a log axis leave point placement finite', (() => {
+  const groups = [{ name: 'A', values: [1, 2, 30, 4, 5, 0.5] }, { name: 'B', values: [10, 12, 11] }];
+  const opts = { errorType: 'sd', yAxis: { log: true } };
+  return [Charts.barChart(groups, Object.assign({ showPoints: true }, opts)), Charts.dotPlot(groups, opts)].every((svg) => {
+    const pts = pointsOf(svg);
+    return pts.length === 9 && pts.every((p) => isFinite(p.x) && isFinite(p.y)) && insideSlots(svg, pts);
+  });
 })());
 
 // Column charts size their plot to the categories so a few bars are not left with
@@ -166,10 +240,11 @@ ok('a long title widens the figure but keeps the columns together under it', (()
     Math.abs((ys(titled) - ys(plain)) - (barRects(titled)[0].x - barRects(plain)[0].x)) < 1e-9;   // y-axis title moves with the plot
 })());
 ok('a dense point column gets the room it needs to stay clear in a compact figure', (() => {
+  // the tied row sits right on its own tiny error bar, so it must also make room for the caps
   const tied = [{ name: 'Tied', values: Array.from({ length: 24 }, (_, k) => 50 + (k % 3) * 0.01) }, { name: 'Other', values: [10, 20, 30, 40] }];
   return [Charts.barChart(tied, { showPoints: true }), Charts.dotPlot(tied, {})].every((svg, k) => {
-    const pts = pointsOf(svg);
-    return pts.length === 28 && closestPair(pts) >= 2 * (k ? 3.6 : 3.1) && insideSlots(svg, pts) && viewWidth(svg) < 580;
+    const pts = pointsOf(svg), r = k ? 3.6 : 3.1;
+    return pts.length === 28 && closestPair(pts) >= 2 * r && whiskerGap(svg, pts) >= clearOfWhisker(r) - 0.01 && insideSlots(svg, pts) && viewWidth(svg) < 580;
   });
 })());
 ok('grouped bar clusters sit close together, and turning compact spacing off restores them', (() => {
