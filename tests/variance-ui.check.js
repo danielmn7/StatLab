@@ -11,6 +11,23 @@ app.setPath('userData', temp);
 app.setPath('sessionData', temp);
 let win, pass = 0;
 const run = (code) => win.webContents.executeJavaScript(code, true);
+const UNSAFE_INLINE_JS_CHAR_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+function escapeUnsafeForInlineJs(value) {
+  return JSON.stringify(value).replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (x) => UNSAFE_INLINE_JS_CHAR_MAP[x]);
+}
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
 function ok(name, condition) {
   assert.ok(condition, name);
@@ -261,7 +278,7 @@ app.whenReady().then(async () => {
 
   const label = 'Control <em>not markup</em> & X';
   await importGroups(['Control', 'Treated'], [a, b], 'Escaped labels');
-  await run(`(() => { const input = document.querySelector('input.colname'); input.value = ${JSON.stringify(label)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await run(`(() => { const input = document.querySelector('input.colname'); input.value = ${escapeUnsafeForInlineJs(label)}; input.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await openAnalyze();
   ok('inline variance summary renders arbitrary group labels as text', await run(`document.querySelector('.variance-summary').textContent.includes(${JSON.stringify(label)}) && !document.querySelector('.variance-summary em')`));
   await click('#analyze-go');
