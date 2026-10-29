@@ -71,10 +71,7 @@ const Charts = (function () {
     const fo = opt.fillOpacity != null ? opt.fillOpacity : 1;
     const sw = opt.strokeWidth != null ? opt.strokeWidth : 0.8;
     const x = opt.attrs ? ' ' + opt.attrs : '';
-    // Overall element opacity (fill + stroke together) — used to fade points that
-    // sit on top of an error bar so the whisker reads through (issue #17).
-    const op = opt.opacity != null ? ` opacity="${opt.opacity}"` : '';
-    const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"${op}`;
+    const common = `fill-opacity="${fo}" stroke="${stroke}" stroke-width="${sw}"`;
     switch (shape) {
       case 'square': { const s = r * 1.78; return `<rect x="${(cx - s / 2).toFixed(2)}" y="${(cy - s / 2).toFixed(2)}" width="${s.toFixed(2)}" height="${s.toFixed(2)}" fill="${fill}" ${common}${x}/>`; }
       case 'triangle': { const h = r * 2.0; const p = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ${(cx - h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ${(cx + h * 0.55).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`; return `<polygon points="${p}" fill="${fill}" ${common}${x}/>`; }
@@ -93,20 +90,6 @@ const Charts = (function () {
   function ptAttrs(g, vi, px, py) {
     return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"`;
   }
-  // Does a data point (center px,py, radius r) overlap an error bar closely enough
-  // that drawing it opaque would hide the whisker? eb = { x, y0, y1, caps:[y…], capW }
-  // where y0..y1 is the vertical stem span and caps are the cap y-positions.
-  // Overlapping points are faded so the bar reads through them (issue #17).
-  function overlapsErrorBar(px, py, r, eb) {
-    if (!eb) return false;
-    const pad = r + 1.2;                                  // point radius + ~half the whisker stroke
-    if (Math.abs(px - eb.x) <= pad && py >= eb.y0 - pad && py <= eb.y1 + pad) return true;
-    for (let k = 0; k < eb.caps.length; k++) {
-      if (Math.abs(py - eb.caps[k]) <= pad && Math.abs(px - eb.x) <= eb.capW + r) return true;
-    }
-    return false;
-  }
-
   // ---- collision-free point placement (column scatters) ----
   // Bar-with-points, dot plots and box-plot outliers spread replicates sideways.
   // Random jitter alone lets near-equal values land on the same spot and bury one
@@ -118,6 +101,49 @@ const Charts = (function () {
   const MARKER_EXTENT = { circle: 1, square: 1.12, triangle: 1.12, diamond: 1.4, cross: 1.3 };
   const SWARM_GAP = 0.8;   // clear space (px) kept between neighbouring markers
   function markerRadius(r, shape, strokeWidth) { return r * (MARKER_EXTENT[shape] || 1) + (strokeWidth || 0) / 2; }
+  // The column's error bar is an obstacle too: a point beside it slides sideways
+  // until its marker stays this far (px) from the stem and caps, rather than being
+  // drawn across the whisker (issue #17 used to fade such points instead).
+  const ERRBAR_GAP = 1.5;
+  // Error-bar geometry in the points' y units, with x measured from the column
+  // centre (the stem is at x = 0): the stem spans y0..y1 and each cap is a
+  // horizontal segment at y of half-width capW; hw is half the whisker stroke.
+  // Y maps a value to y; a value it cannot place (e.g. ≤ 0 on a log axis) puts that
+  // end at `off`, beyond the plot, so the stem keeps running that way. both = the
+  // whisker extends below the mean too; otherwise the stem runs from the mean up to
+  // the upper cap (a negative mean's stem spans both sides, as barChart draws it).
+  function errorBarShape(Y, m, err, both, capW, hw, off) {
+    const at = (v) => { const y = Y(v); return isFinite(y) ? y : off; };
+    const hi = at(m + err), lo = at(m - err), end = both || !(m >= 0) ? lo : at(m);
+    return { y0: Math.min(hi, end), y1: Math.max(hi, end), caps: (both ? [hi, lo] : [hi]).filter((y) => isFinite(y)), capW, hw };
+  }
+  // Clearance from a stroke segment needed by a marker of collision radius r.
+  function barClear(eb, r) { return r + eb.hw + ERRBAR_GAP; }
+  // Forbidden x-intervals (open, column-centre offsets) for a marker of radius r at y.
+  function errorBarBlocks(eb, y, r) {
+    const out = [];
+    if (!eb || !isFinite(y)) return out;
+    const D = barClear(eb, r);
+    const dy = y < eb.y0 ? eb.y0 - y : y > eb.y1 ? y - eb.y1 : 0;
+    if (dy < D) { const w = Math.sqrt(D * D - dy * dy); out.push([-w, w]); }
+    eb.caps.forEach((c) => {
+      const d = Math.abs(y - c);
+      if (d < D) { const w = eb.capW + Math.sqrt(D * D - d * d); out.push([-w, w]); }
+    });
+    return out;
+  }
+  // Widest half-width the error bar blocks anywhere in the y-range [ya, yb]: each
+  // part's blocked width peaks at its own height, so check that peak and both ends.
+  function errorBarReach(eb, ya, yb, r) {
+    if (!eb) return 0;
+    const D = barClear(eb, r);
+    let w = 0;
+    const widest = (y) => errorBarBlocks(eb, y, r).forEach(([, b]) => { w = Math.max(w, b); });
+    widest(ya); widest(yb);
+    if (ya <= eb.y1 && yb >= eb.y0) w = Math.max(w, D);
+    eb.caps.forEach((c) => { if (c >= ya && c <= yb) w = Math.max(w, eb.capW + D); });
+    return w;
+  }
   // Clear x in [-W, W] nearest `target`, given forbidden open intervals `blocks`
   // ([a, b] pairs). Returns null when the whole band is covered.
   function clearSpot(blocks, target, W) {
@@ -138,10 +164,12 @@ const Charts = (function () {
   }
   // One placement pass over points sorted by y (`order`). pts[i] = { y, pref, r }:
   // pixel y, preferred x offset, and collision radius. Clearances scale by `s`.
+  // keep[i] (optional) lists the x-intervals the error bar forbids for point i;
+  // they never scale, so markers may crowd each other before they cross the bar.
   // toCenter packs points toward the column centre instead of their jitter
   // offsets. Returns { xs, clean }; when a point finds no clear spot the pass
   // aborts (clean:false) unless `force`, which puts it in the least-crowded spot.
-  function swarmPass(pts, order, W, s, toCenter, force) {
+  function swarmPass(pts, order, W, s, toCenter, force, keep) {
     const xs = new Array(pts.length).fill(0);
     const placed = [];
     let rMax = 0; pts.forEach((p) => { if (p.r > rMax) rMax = p.r; });
@@ -152,28 +180,30 @@ const Charts = (function () {
       const target = toCenter ? p.pref * 1e-3 : Math.max(-W, Math.min(W, p.pref)); // tiny bias keeps each point on its jitter side
       if (!isFinite(p.y)) { xs[i] = target; continue; }   // not drawable (e.g. ≤ 0 on a log axis)
       while (lo < placed.length && pts[placed[lo]].y < p.y - reach) lo++;
-      const blocks = [];
+      const blocks = [], bar = keep ? keep[i] : [];
       for (let k = lo; k < placed.length; k++) {
         const j = placed[k], d = (p.r + pts[j].r + SWARM_GAP) * s, dy = p.y - pts[j].y;
         if (dy < d) { const w = Math.sqrt(d * d - dy * dy); blocks.push([xs[j] - w, xs[j] + w]); }
       }
-      let x = clearSpot(blocks, target, W);
+      let x = clearSpot(bar.length ? blocks.concat(bar) : blocks, target, W);
       if (x == null) {
         clean = false;
         if (!force) return { xs, clean };
-        // Too dense to keep every marker clear: take the grid spot overlapped by the
-        // fewest neighbours (nearest the target on ties), so the pile spreads evenly.
+        // Too dense to keep every marker clear: take the grid spot off the error bar
+        // (when the slot has one) overlapped by the fewest neighbours, nearest the
+        // target on ties, so the pile spreads evenly.
         const steps = Math.min(60, Math.max(2, Math.ceil(2 * W / Math.max(1, p.r))));
-        const step = (2 * W) / steps, cover = new Array(steps + 2).fill(0);
-        if (step > 0) blocks.forEach(([a, b]) => {
+        const step = (2 * W) / steps, cover = new Array(steps + 2).fill(0), coverBar = new Array(steps + 2).fill(0);
+        const count = (list, into) => { if (step > 0) list.forEach(([a, b]) => {
           const g0 = Math.max(0, Math.ceil((a + W) / step - 1e-9)), g1 = Math.min(steps, Math.floor((b + W) / step + 1e-9));
-          if (g0 <= g1) { cover[g0]++; cover[g1 + 1]--; }
-        });
-        let best = target, bestN = Infinity, run = 0;
+          if (g0 <= g1) { into[g0]++; into[g1 + 1]--; }
+        }); };
+        count(blocks, cover); count(bar, coverBar);
+        let best = target, bestB = Infinity, bestN = Infinity, run = 0, runB = 0;
         for (let g = 0; g <= steps; g++) {
-          run += cover[g];
+          run += cover[g]; runB += coverBar[g];
           const c = -W + step * g;
-          if (run < bestN || (run === bestN && Math.abs(c - target) < Math.abs(best - target))) { bestN = run; best = c; }
+          if (runB < bestB || (runB === bestB && (run < bestN || (run === bestN && Math.abs(c - target) < Math.abs(best - target))))) { bestB = runB; bestN = run; best = c; }
         }
         x = best;
       }
@@ -186,8 +216,8 @@ const Charts = (function () {
   // usual scattered look instead of lining up on the centre (and the error bar).
   // Each move lands on a spot clear of every other point, so no overlap is added,
   // and stays inside the usual cloud half-width W so packed rows are not
-  // reshuffled into gappy, wider rows.
-  function settleTowardJitter(pts, order, xs, W, s) {
+  // reshuffled into gappy, wider rows. Nor does a move cross the error bar (keep).
+  function settleTowardJitter(pts, order, xs, W, s, keep) {
     let rMax = 0; pts.forEach((p) => { if (p.r > rMax) rMax = p.r; });
     const reach = (2 * rMax + SWARM_GAP) * s;
     const seq = order.filter((i) => isFinite(pts[i].y));
@@ -198,6 +228,7 @@ const Charts = (function () {
       for (let m = k - 1; m >= 0 && p.y - pts[seq[m]].y < reach && blocks.length <= CROWD; m--) add(seq[m]);
       for (let m = k + 1; m < seq.length && pts[seq[m]].y - p.y < reach && blocks.length <= CROWD; m++) add(seq[m]);
       if (blocks.length > CROWD) continue;
+      if (keep) blocks.push(...keep[i]);
       const x = clearSpot(blocks, Math.max(-W, Math.min(W, p.pref)), W);
       if (x != null && Math.abs(x - p.pref) < Math.abs(xs[i] - p.pref)) xs[i] = x;
     }
@@ -212,20 +243,23 @@ const Charts = (function () {
   // Horizontal offsets for one column of points. W0 is the usual half-width of the
   // point cloud; when the points cannot all sit clear of one another there, the
   // cloud may widen up to Wmax (the category's own slot) before markers are
-  // finally allowed to overlap partially. Deterministic for identical input.
-  function swarmOffsets(pts, W0, Wmax) {
+  // finally allowed to overlap partially. `bar` (optional, see errorBarShape) is the
+  // column's error bar: points keep clear of it at every step, so they sit beside
+  // the whisker instead of on it. Deterministic for identical input.
+  function swarmOffsets(pts, W0, Wmax, bar) {
     if (!pts.length) return [];
     W0 = Math.max(0, W0 || 0); Wmax = Math.max(W0, Wmax || 0);
     const yKey = (p) => (isFinite(p.y) ? p.y : Infinity);
     const order = pts.map((_, i) => i).sort((a, b) => { const ya = yKey(pts[a]), yb = yKey(pts[b]); return ya === yb ? a - b : ya < yb ? -1 : 1; });
+    const keep = bar ? pts.map((p) => errorBarBlocks(bar, p.y, p.r)) : null;
     const tiers = [[W0, 1, false], [W0, 1, true]];
     if (Wmax > W0) tiers.push([Wmax, 1, true]);
     tiers.push([Wmax, 0.75, true]);
     for (const [W, s, c] of tiers) {
-      const r = swarmPass(pts, order, W, s, c, false);
-      if (r.clean) return c ? settleTowardJitter(pts, order, r.xs, W0, s) : r.xs;
+      const r = swarmPass(pts, order, W, s, c, false, keep);
+      if (r.clean) return c ? settleTowardJitter(pts, order, r.xs, W0, s, keep) : r.xs;
     }
-    return settleTowardJitter(pts, order, swarmPass(pts, order, Wmax, 0.5, true, true).xs, W0, 0.5);
+    return settleTowardJitter(pts, order, swarmPass(pts, order, Wmax, 0.5, true, true, keep).xs, W0, 0.5, keep);
   }
 
   // ---- numeric helpers ----
@@ -507,12 +541,18 @@ const Charts = (function () {
   // Slot a column of markers needs so near-equal values can sit side by side: points
   // within half a diameter of one another in y are packed one diameter apart outward
   // from the centre, and columnReach keeps a marker radius plus 2 px inside the slot.
+  // Beside the column's error bar (`bar`, in the same y units) a row instead starts
+  // on both sides of the whisker's keep-out and packs outward from there.
   // ys: pixel offsets (non-finite = not drawn); r: the column's largest marker radius.
-  function swarmSlot(ys, r) {
+  function swarmSlot(ys, r, bar) {
     const d = 2 * r + SWARM_GAP, s = ys.filter((y) => isFinite(y)).sort((a, b) => a - b);
-    let k = 0;
-    for (let i = 0, j = 0; i < s.length; i++) { while (s[i] - s[j] > d / 2) j++; k = Math.max(k, i - j + 1); }
-    return 2 * Math.ceil(Math.max(0, k - 1) / 2) * d + 2 * r + 4;
+    let half = 0;
+    for (let i = 0, j = 0; i < s.length; i++) {
+      while (s[i] - s[j] > d / 2) j++;
+      const k = i - j + 1, K = bar ? errorBarReach(bar, s[j], s[i], r) : 0;
+      half = Math.max(half, K > 0 ? K + (Math.ceil(k / 2) - 1) * d : Math.ceil((k - 1) / 2) * d);
+    }
+    return 2 * half + 2 * r + 4;
   }
   // Compact slot for categories named `labels`: the base slot, widened so neighbouring
   // names don't collide and so each entry of `swarm` (a column's slot need) fits.
@@ -564,10 +604,15 @@ const Charts = (function () {
     stats.forEach((st) => tally(opts.showPoints ? st.values : [st.m], scale, t));
     const ts = textStyleOf(opts);
     const n = groups.length;
+    // error bar as an obstacle for the points: 7-px caps, half the 1.3-px stroke.
+    // `off` places an end the axis cannot show (≤ 0 on a log axis) below the plot.
+    const both = opts.errorBothSides !== false;
+    const barOf = (st, Y, off) => (st.err > 0 ? errorBarShape(Y, st.m, st.err, both, 7, 0.65, off) : null);
     // compact layout: slots fit the bars, their names and (when shown) each point column
-    const f0 = frame(opts);
-    const swarm = opts.showPoints ? groups.map((g, i) => swarmSlot(g.values.map((v) => scale.frac(v) * f0.ph),
-      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.1, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0))) : [];
+    const f0 = frame(opts), upY = (v) => scale.frac(v) * f0.ph;
+    const swarm = opts.showPoints ? groups.map((g, i) => swarmSlot(g.values.map(upY),
+      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.1, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0),
+      barOf(stats[i], upY, -Infinity))) : [];
     const f = columnFrame(opts, opts.margin, n, compactSlot(COL_SLOT, stats.map((st) => st.name), ts, swarm),
       bottomRowPlot(f0.m, errLabel(errType), t), titleRoom(opts.title, ts));
     const sc = withY(f, scale);
@@ -586,17 +631,14 @@ const Charts = (function () {
       const yTop = sc.toY(st.m), yBase = sc.toY(baseVal(sc));
       const col = colors[i % colors.length];
       marks += `<rect x="${x - bw / 2}" y="${Math.min(yTop, yBase)}" width="${bw}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" ${barBorderOf(opts, col, 1.2).attr} rx="1.5"/>`;
-      // error bar
-      let ebar = null;
+      // error bar, drawn over the points: the layout keeps points beside the whisker,
+      // and where a slot is too narrow to, the whisker still reads through
+      let whisker = '';
       if (st.err > 0) {
         const yhi = sc.toY(st.m + st.err), ylo = sc.toY(st.m - st.err);
-        const both = opts.errorBothSides !== false;
-        const stemEnd = both ? ylo : (st.m >= 0 ? yTop : ylo);
-        marks += `<line x1="${x}" y1="${yhi}" x2="${x}" y2="${st.m >= 0 ? yTop : ylo}" stroke="#1c2733" stroke-width="1.3"/>`;
-        marks += `<line x1="${x - 7}" y1="${yhi}" x2="${x + 7}" y2="${yhi}" stroke="#1c2733" stroke-width="1.3"/>`;
-        if (both) { marks += `<line x1="${x}" y1="${yTop}" x2="${x}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; marks += `<line x1="${x - 7}" y1="${ylo}" x2="${x + 7}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; }
-        // geometry so overlapping points can be faded to reveal the whisker (issue #17)
-        ebar = { x, y0: Math.min(yhi, stemEnd), y1: Math.max(yhi, stemEnd), caps: both ? [yhi, ylo] : [yhi], capW: 7 };
+        whisker += `<line x1="${x}" y1="${yhi}" x2="${x}" y2="${st.m >= 0 ? yTop : ylo}" stroke="#1c2733" stroke-width="1.3"/>`;
+        whisker += `<line x1="${x - 7}" y1="${yhi}" x2="${x + 7}" y2="${yhi}" stroke="#1c2733" stroke-width="1.3"/>`;
+        if (both) { whisker += `<line x1="${x}" y1="${yTop}" x2="${x}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; whisker += `<line x1="${x - 7}" y1="${ylo}" x2="${x + 7}" y2="${ylo}" stroke="#1c2733" stroke-width="1.3"/>`; }
         tops.push(yhi);
       } else tops.push(yTop);
       // points
@@ -604,9 +646,10 @@ const Charts = (function () {
         const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
         let seed = i * 99 + 7;
         const pts = st.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * bw * 0.7, r: markerRadius(3.1, shape, 0.8), shape }; });
-        const offs = swarmOffsets(pts, bw * 0.35, columnReach(slot, pts));
-        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; const dim = overlapsErrorBar(px, py, 3.1, ebar); marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, opacity: dim ? 0.32 : 1, attrs: ptAttrs(i, vi, px, py) }); });
+        const offs = swarmOffsets(pts, bw * 0.35, columnReach(slot, pts), barOf(st, sc.toY, Infinity));
+        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       }
+      marks += whisker;
       // x label (outside clip)
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(st.name)}</text>`;
     });
@@ -658,10 +701,15 @@ const Charts = (function () {
     groups.forEach((g) => tally(g.values, scale, t));
     const ts = textStyleOf(opts);
     const n = groups.length;
+    const errOf = (v) => { const se = sem(v); return errType === 'sem' ? se : errType === 'ci95' ? tcrit95(v.length - 1) * se : sd(v); };
+    // error bar as an obstacle for the points: 8-px caps, half the 1.3-px stroke. The
+    // mean line spans the whole cloud, so it is left out (points may meet it).
+    const barOf = (g, Y, off) => (errType !== 'none' ? errorBarShape(Y, mean(g.values), errOf(g.values), true, 8, 0.65, off) : null);
     // compact layout: slots fit each point column and the category names
-    const f0 = frame(opts);
-    const swarm = groups.map((g, i) => swarmSlot(g.values.map((v) => scale.frac(v) * f0.ph),
-      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.6, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0)));
+    const f0 = frame(opts), upY = (v) => scale.frac(v) * f0.ph;
+    const swarm = groups.map((g, i) => swarmSlot(g.values.map(upY),
+      g.values.reduce((r, _, vi) => Math.max(r, markerRadius(3.6, ptShape(opts, i, vi, (opts.markers && opts.markers[i]) || 'circle'), 0.8)), 0),
+      barOf(g, upY, -Infinity)));
     const f = columnFrame(opts, opts.margin, n, compactSlot(COL_SLOT, groups.map((g) => g.name), ts, swarm),
       bottomRowPlot(f0.m, errLabel(errType), t), titleRoom(opts.title, ts));
     const sc = withY(f, scale);
@@ -678,12 +726,11 @@ const Charts = (function () {
     groups.forEach((g, i) => {
       const x = f.x0 + slot * i + slot / 2; cx.push(x);
       const col = colors[i % colors.length];
-      const m = mean(g.values), se = sem(g.values), sdv = sd(g.values);
-      const err = errType === 'sem' ? se : errType === 'ci95' ? tcrit95(g.values.length - 1) * se : sdv;
+      const m = mean(g.values), err = errOf(g.values);
       const seriesShape = (opts.markers && opts.markers[i]) || 'circle';
       let seed = i * 131 + 17;
       const pts = g.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * spread, r: markerRadius(3.6, shape, 0.8), shape }; });
-      const offs = swarmOffsets(pts, spread / 2, columnReach(slot, pts));
+      const offs = swarmOffsets(pts, spread / 2, columnReach(slot, pts), barOf(g, sc.toY, Infinity));
       pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.6, pt.shape, { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
       // mean line + error
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
