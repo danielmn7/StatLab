@@ -22,6 +22,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  // Published references open in the system browser, never in a new app window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
   win.loadFile(path.join(__dirname, '..', 'index.html'));
   buildMenu();
 }
