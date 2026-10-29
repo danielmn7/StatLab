@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { app, BrowserWindow } = require('electron');
 const D = require('../js/data.js');
+const T = require('../js/stats-tests.js');
 
 const root = path.join(__dirname, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'statlab-analysis-'));
@@ -120,7 +121,7 @@ app.whenReady().then(async () => {
         return result.closest('.nav-branch').dataset.tableId === ${JSON.stringify(result.tableId)} &&
           graph.closest('.nav-branch').dataset.tableId === ${JSON.stringify(result.tableId)};
       })()`));
-      ok(label + ' labels ' + alternative + ' in result and report', details.pLabel === 'P value (' + (alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative) + ')' && details.hypothesis.includes('H₁:') && details.report.includes(alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative));
+      ok(label + ' labels ' + alternative + ' in result and report', details.pLabel === 'P value (' + (test.kind === 'unpaired-t' ? 'means, ' : '') + (alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative) + ')' && details.hypothesis.includes('H₁:') && details.report.includes(alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative));
       ok(label + ' uses direction-aware significance for ' + alternative, details.significant === (alternative !== 'less'));
       ok(label + ' formats extreme p values without duplicate operators', !details.report.includes('p = >') && !details.report.includes('p = <'));
       if (alternative === 'two-sided') twoSided = details;
@@ -128,7 +129,14 @@ app.whenReady().then(async () => {
         ok(label + ' explicitly retains two-sided CIs', details.text.includes('remain two-sided 95% intervals'));
       }
       if (test.mu0) ok(label + ' records the nonzero reference value', result.spec.mu0 === 1 && details.hypothesis.endsWith(alternative === 'greater' ? '> 1' : alternative === 'less' ? '< 1' : '≠ 1'));
-      if (test.kind === 'unpaired-t') ok(label + ' keeps its variance assumption', result.spec.welch === !test.student);
+      if (test.kind === 'unpaired-t') {
+        ok(label + ' keeps its variance assumption', result.spec.welch === !test.student);
+        const graph = saved.graphs.find((g) => g.id === result.graphId);
+        const expected = T.unpairedT(high, low, !test.student, alternative);
+        ok(label + ' graph uses the selected mean-test tail for ' + alternative, Math.abs(graph.spec.opts.sig[0].p - expected.p) <= 1e-10 * Math.abs(expected.p));
+        const diagnosticP = +await run(`document.querySelector('.variance-check').dataset.p`);
+        ok(label + ' leaves variance inference independent of ' + alternative, Math.abs(diagnosticP - T.brownForsythe([high, low]).p) < 1e-12 && await run(`!document.querySelector('.variance-check .apa').textContent.includes('one-tailed')`));
+      }
       const json = JSON.stringify(saved);
       assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(json)})`));
       ok(label + ' preserves hypothesis and result after reopening', (await resultDetails()).text === details.text && (await state()).results.find((r) => r.id === result.id).spec.alternative === alternative);
@@ -214,7 +222,7 @@ app.whenReady().then(async () => {
   ok('hypothesis group names render as text, not markup', (await resultDetails()).hypothesis.includes('High <treated> & "A"') && await run(`!document.querySelector('.result-card treated') && document.querySelector('.verdict').textContent.includes('<treated>')`));
 
   await fixture('column', ['A', 'B', 'C'], low.map((v) => [v, v + 1, v + 2]));
-  for (const name of ['One-way ANOVA', 'Kruskal-Wallis', 'Normality tests', "Grubbs' outlier test", 'Descriptive statistics']) {
+  for (const name of ['One-way ANOVA', 'Kruskal-Wallis', 'Variance test', 'Normality tests', "Grubbs' outlier test", 'Descriptive statistics']) {
     await openAnalysis(name);
     ok(name + ' does not offer inapplicable directional options', await run(`!document.querySelector('#analyze-alternative')`));
   }

@@ -239,7 +239,7 @@ app.whenReady().then(async () => {
   await click(item('result', orphaned.results[0].id));
   ok('orphan result still opens with its missing-source explanation', await run(`document.querySelector('#content').textContent.includes('(source table missing)')`));
   await click(item('graph', orphaned.graphs[0].id));
-  ok('orphan graph remains viewable', await run(`!!document.querySelector('#graph-canvas svg')`));
+  ok('orphan graph remains accessible without rendering or exporting stale inference', await run(`!!document.querySelector('.graph-unavailable') && !document.querySelector('#graph-canvas') && !window.StatLab.hasActiveGraph() && window.StatLab.activeGraphSVG() === null && Array.from(document.querySelectorAll('.view-actions button')).filter((b) => /SVG|PNG/.test(b.textContent)).every((b) => b.disabled)`));
   await load({ ...orphaned, tables: [] });
   await verifySidebar('projects containing only unlinked items do not lose any results or graphs');
   await load(legacy);
