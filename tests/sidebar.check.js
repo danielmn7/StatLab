@@ -12,6 +12,22 @@ app.setPath('userData', temp);
 app.setPath('sessionData', temp);
 let win, pass = 0;
 const run = (code) => win.webContents.executeJavaScript(code, true);
+const UNSAFE_JS_CHAR_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+const toSafeJSLiteral = (value) =>
+  JSON.stringify(String(value)).replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => UNSAFE_JS_CHAR_MAP[ch]);
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
 const branch = (id) => `.nav-branch[data-table-id="${id}"]`;
 const item = (view, id) => `.nav-item[data-view="${view}"][data-id="${id}"]`;
@@ -60,7 +76,7 @@ async function load(project) {
 }
 async function contextAction(selector, label) {
   await click(selector, 'right');
-  await run(`Array.from(document.querySelectorAll('#ctx-menu .ctx-item')).find((entry) => entry.textContent === ${JSON.stringify(label)}).click()`);
+  await run(`Array.from(document.querySelectorAll('#ctx-menu .ctx-item')).find((entry) => entry.textContent === ${toSafeJSLiteral(label)}).click()`);
 }
 async function verifySidebar(name) {
   ok(name, await run(`(() => {
