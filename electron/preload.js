@@ -6,4 +6,9 @@ contextBridge.exposeInMainWorld('desktop', {
   saveProject: () => ipcRenderer.invoke('project:save'),
   saveProjectAs: () => ipcRenderer.invoke('project:saveAs'),
   openProject: () => ipcRenderer.invoke('project:open'),
+  getSession: () => ipcRenderer.invoke('session:get'),
+  checkpointSession: (json, token) => ipcRenderer.invoke('session:checkpoint', json, token),
+  restoreSession: (id) => ipcRenderer.invoke('session:restore', id),
+  startFresh: () => ipcRenderer.invoke('session:fresh'),
+  replaceProject: (json) => ipcRenderer.invoke('project:replace', json),
 });

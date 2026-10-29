@@ -59,7 +59,6 @@ app.whenReady().then(async () => {
     show: false, width: 1320, height: 860,
     webPreferences: {
       contextIsolation: true, spellcheck: false, backgroundThrottling: false,
-      preload: path.join(root, 'electron', 'preload.js'),
     },
   });
   const pageErrors = [];
