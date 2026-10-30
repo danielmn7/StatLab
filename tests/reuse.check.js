@@ -17,6 +17,23 @@ let win, pass = 0;
 const run = (code) => win.webContents.executeJavaScript(code, true);
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
 const item = (view, id) => `.nav-item[data-view="${view}"][data-id="${id}"]`;
+const JS_EMBED_CHAR_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+function toSafeJSLiteral(value) {
+  return JSON.stringify(value).replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => JS_EMBED_CHAR_MAP[ch]);
+}
 function ok(name, condition) {
   assert.ok(condition, name);
   console.log('PASS', name);
@@ -36,7 +53,7 @@ async function click(selector, index = 0, button = 'left') {
 }
 // Click a header button by its visible label.
 async function action(label) {
-  const index = await run(`Array.from(document.querySelectorAll('.view-actions button')).findIndex((b) => b.textContent.includes(${JSON.stringify(label)}))`);
+  const index = await run(`Array.from(document.querySelectorAll('.view-actions button')).findIndex((b) => b.textContent.includes(${toSafeJSLiteral(label)}))`);
   if (index < 0) throw new Error('No action button: ' + label);
   await click('.view-actions button', index);
 }
