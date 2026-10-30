@@ -40,6 +40,23 @@ function ok(name, condition) {
   pass++;
 }
 function near(actual, expected) { return Math.abs(actual - expected) <= 1e-10 * (1 + Math.abs(expected)); }
+const jsCharMap = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+function escapeUnsafeChars(str) {
+  return str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => jsCharMap[ch]);
+}
 async function click(selector, index = 0, button = 'left') {
   const point = await run(`(() => {
     const target = document.querySelectorAll(${JSON.stringify(selector)})[${index}];
@@ -78,7 +95,8 @@ async function openAnalyze(tableId, testName) {
   await click(item('data', tableId));
   await action('Analyze');
   if (testName) {
-    const index = await run(`Array.from(document.querySelectorAll('.test-opt')).findIndex((c) => c.querySelector('.t-name').textContent.startsWith(${JSON.stringify(testName)}))`);
+    const safeTestName = escapeUnsafeChars(JSON.stringify(testName));
+    const index = await run(`Array.from(document.querySelectorAll('.test-opt')).findIndex((c) => c.querySelector('.t-name').textContent.startsWith(${safeTestName}))`);
     await click('.test-opt', index);
   }
 }
