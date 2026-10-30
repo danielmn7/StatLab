@@ -87,9 +87,18 @@ const Charts = (function () {
     const pm = opts.pointMarkers; const k = g + ':' + vi;
     return (pm && pm[k]) || seriesShape || 'circle';
   }
-  function ptAttrs(g, vi, px, py) {
-    return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"`;
+  function ptAttrs(g, vi, px, py, tip) {
+    return `class="data-point" data-pg="${g}" data-pi="${vi}" data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}"` + (tip ? ' ' + tip : '');
   }
+  // ---- point hover read-outs ----
+  // Every drawn data point carries what its hover tooltip shows: a title plus
+  // [label, value] rows, as JSON in data-pt. The app hit-tests points by their
+  // data-px/data-py centres (they sit under the category drag rects), so markers
+  // that are not per-point editable (paired, box outliers) get hoverAttrs instead.
+  function pointTip(title, rows) { return `data-pt="${escAttr(JSON.stringify({ t: String(title), r: rows }))}"`; }
+  function hoverAttrs(px, py, tip) { return `data-px="${px.toFixed(2)}" data-py="${py.toFixed(2)}" ${tip}`; }
+  // A data value as entered: 12 significant digits drops binary float noise only.
+  function rawNum(v) { return String(+(+v).toPrecision(12)); }
   // ---- collision-free point placement (column scatters) ----
   // Bar-with-points, dot plots and box-plot outliers spread replicates sideways.
   // Random jitter alone lets near-equal values land on the same spot and bury one
@@ -647,7 +656,7 @@ const Charts = (function () {
         let seed = i * 99 + 7;
         const pts = st.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * bw * 0.7, r: markerRadius(3.1, shape, 0.8), shape }; });
         const offs = swarmOffsets(pts, bw * 0.35, columnReach(slot, pts), barOf(st, sc.toY, Infinity));
-        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
+        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py, pointTip(st.name, [['Value', rawNum(st.values[vi])]])) }); });
       }
       marks += whisker;
       // x label (outside clip)
@@ -731,7 +740,7 @@ const Charts = (function () {
       let seed = i * 131 + 17;
       const pts = g.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * spread, r: markerRadius(3.6, shape, 0.8), shape }; });
       const offs = swarmOffsets(pts, spread / 2, columnReach(slot, pts), barOf(g, sc.toY, Infinity));
-      pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.6, pt.shape, { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py) }); });
+      pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.6, pt.shape, { fill: col, stroke: col, fillOpacity: 0.78, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py, pointTip(g.name, [['Value', rawNum(g.values[vi])]])) }); });
       // mean line + error
       marks += `<line x1="${x - wm}" y1="${sc.toY(m)}" x2="${x + wm}" y2="${sc.toY(m)}" stroke="#1c2733" stroke-width="2"/>`;
       if (errType !== 'none') {
@@ -787,9 +796,9 @@ const Charts = (function () {
       marks += `<line x1="${x - bw / 4}" y1="${sc.toY(whi)}" x2="${x + bw / 4}" y2="${sc.toY(whi)}" stroke="${col}" stroke-width="1.3"/>`;
       marks += `<line x1="${x - bw / 4}" y1="${sc.toY(wlo)}" x2="${x + bw / 4}" y2="${sc.toY(wlo)}" stroke="${col}" stroke-width="1.3"/>`;
       // outliers sit on the centre line unless near-equal ones would hide each other
-      const outl = sorted.filter((v) => v < lowF || v > highF).map((v) => ({ y: sc.toY(v), pref: 0, r: markerRadius(3, 'circle', 1.2) }));
+      const outl = sorted.filter((v) => v < lowF || v > highF).map((v) => ({ v, y: sc.toY(v), pref: 0, r: markerRadius(3, 'circle', 1.2) }));
       const outX = swarmOffsets(outl, bw / 4, columnReach(slot, outl));
-      outl.forEach((o, k) => { marks += `<circle class="box-outlier" cx="${(x + outX[k]).toFixed(2)}" cy="${o.y}" r="3" fill="none" stroke="${col}" stroke-width="1.2"/>`; });
+      outl.forEach((o, k) => { marks += `<circle class="box-outlier" cx="${(x + outX[k]).toFixed(2)}" cy="${o.y}" r="3" fill="none" stroke="${col}" stroke-width="1.2" ${hoverAttrs(x + outX[k], o.y, pointTip(g.name, [['Outlier', rawNum(o.v)]]))}/>`; });
       tops.push(sc.toY(whi));
       s += `<text x="${x}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.catSize}" fill="#1c2733">${esc(g.name)}</text>`;
     });
@@ -815,11 +824,13 @@ const Charts = (function () {
     let s = open(f, opts.title, ts);
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
     s += `<line x1="${f.x0}" y1="${f.y1}" x2="${f.x1}" y2="${f.y1}" stroke="#1c2733" stroke-width="1.3"/>`;
-    pairs.forEach(([a, b]) => {
-      const up = b >= a;
+    pairs.forEach(([a, b], k) => {
+      const up = b >= a, d = b - a;
+      // both ends of a pair show the whole pair: before, after and the change
+      const tip = pointTip('Pair ' + (k + 1), [[opts.labelA || 'Before', rawNum(a)], [opts.labelB || 'After', rawNum(b)], ['Change', (d > 0 ? '+' : '') + rawNum(d)]]);
       s += `<line x1="${xA}" y1="${sc.toY(a)}" x2="${xB}" y2="${sc.toY(b)}" stroke="${up ? '#dc2626' : '#2563eb'}" stroke-width="1.1" stroke-opacity="0.55"/>`;
-      s += `<circle cx="${xA}" cy="${sc.toY(a)}" r="3.6" fill="#0d9488"/>`;
-      s += `<circle cx="${xB}" cy="${sc.toY(b)}" r="3.6" fill="#7c3aed"/>`;
+      s += `<circle cx="${xA}" cy="${sc.toY(a)}" r="3.6" fill="#0d9488" ${hoverAttrs(xA, sc.toY(a), tip)}/>`;
+      s += `<circle cx="${xB}" cy="${sc.toY(b)}" r="3.6" fill="#7c3aed" ${hoverAttrs(xB, sc.toY(b), tip)}/>`;
     });
     s += `<text x="${xA}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.labelA || 'Before')}</text>`;
     s += `<text x="${xB}" y="${f.y1 + 18}" text-anchor="middle" font-size="${ts.labelSize}" font-weight="${ts.labelWeight}" fill="#1c2733">${esc(opts.labelB || 'After')}</text>`;
@@ -868,7 +879,8 @@ const Charts = (function () {
       if ((scx.log && !(xs[i] > 0)) || (sc.log && !(ys[i] > 0))) { t.log++; continue; }
       if (xs[i] < scx.min - 1e-9 || xs[i] > scx.max + 1e-9 || ys[i] < sc.min - 1e-9 || ys[i] > sc.max + 1e-9) t.out++;
       const px = scx.toX(xs[i]), py = sc.toY(ys[i]);
-      marks += markerSVG(px, py, 3.8, ptShape(opts, 0, i, seriesShape), { fill: ptFill, stroke: ptStroke, fillOpacity: 0.75, strokeWidth: 0.8, attrs: ptAttrs(0, i, px, py) });
+      const tip = pointTip('Point ' + (i + 1), [[opts.xLabel || 'X', rawNum(xs[i])], [opts.yLabel || 'Y', rawNum(ys[i])]]);
+      marks += markerSVG(px, py, 3.8, ptShape(opts, 0, i, seriesShape), { fill: ptFill, stroke: ptStroke, fillOpacity: 0.75, strokeWidth: 0.8, attrs: ptAttrs(0, i, px, py, tip) });
     }
     s += clipWrap(f, uid, marks);
     if (opts.annotation) s += `<text x="${f.x0 + 10}" y="${f.y0 + 14}" font-size="11.5" fill="#5b6b7b">${esc(opts.annotation)}</text>`;
@@ -1060,8 +1072,12 @@ const Charts = (function () {
       if (!vals.length) return null;
       const m = mean(vals), sdv = vals.length > 1 ? sd(vals) : 0, se = vals.length > 1 ? sdv / Math.sqrt(vals.length) : 0;
       const err = errType === 'sd' ? sdv : errType === 'ci95' ? (vals.length > 1 ? tcrit95(vals.length - 1) * se : 0) : errType === 'none' ? 0 : se;
-      return { m, err };
+      return { m, err, n: vals.length };
     };
+    // hover read-out for one plotted mean: a lone value prints as entered
+    const errName = { sd: 'SD', sem: 'SEM', ci95: '95% CI' }[errType];
+    const lineTip = (ser, i, p) => pointTip(`${ser.name} · ${rowNames[i]}`, p.n === 1 ? [['Value', rawNum(p.m)]]
+      : [['Mean', fmt(p.m)]].concat(errName ? [['± ' + errName, fmt(p.err)]] : [], [['n', String(p.n)]]));
     const series = colNames.map((name, j) => ({ name, points: rowNames.map((_, i) => stat(cells[i] && cells[i][j])) }));
     const all = series.flatMap((ser) => ser.points.filter(Boolean).flatMap((p) => [p.m - p.err, p.m + p.err]));
     const lo = all.length ? Math.min(...all) : 0, hi = all.length ? Math.max(...all) : 1;
@@ -1092,7 +1108,7 @@ const Charts = (function () {
           marks += `<line x1="${x - 5}" y1="${yhi}" x2="${x + 5}" y2="${yhi}" stroke="${col}" stroke-width="1.2"/>`;
           marks += `<line x1="${x - 5}" y1="${ylo}" x2="${x + 5}" y2="${ylo}" stroke="${col}" stroke-width="1.2"/>`;
         }
-        if (opts.showPoints !== false) marks += markerSVG(x, y, 3.8, ptShape(opts, j, i, shape), { fill: col, stroke: col, fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(j, i, x, y) });
+        if (opts.showPoints !== false) marks += markerSVG(x, y, 3.8, ptShape(opts, j, i, shape), { fill: col, stroke: col, fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(j, i, x, y, lineTip(ser, i, p)) });
       });
       marks += `<path class="grouped-line-series" data-series="${escAttr(ser.name)}" d="${path}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
     });

@@ -1504,7 +1504,7 @@
       refresh();
     }
     if (['bar', 'dot', 'box'].includes(ct)) enableCatDrag(canvas, reorderGroups);
-    enableBarTooltip(canvas);
+    enableChartTooltip(canvas);
     if (['dot', 'bar', 'xy'].includes(ct)) enablePointSymbolEdit(canvas, graph, ct, refresh);
 
     // chart type (depends on data)
@@ -1525,7 +1525,9 @@
     }
     if (graph.spec.chartType === 'bar') {
       controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints, (v) => { o.showPoints = v; refresh(); })));
-      controls.append(el('div', { class: 'ctrl-note' }, 'Tip: hover any bar to see its mean, median, mode & range.'));
+      controls.append(el('div', { class: 'ctrl-note' }, o.showPoints
+        ? 'Tip: hover a bar to see its mean, median, mode & range, or a point to see its value.'
+        : 'Tip: hover any bar to see its mean, median, mode & range.'));
     }
     if (graph.spec.chartType === 'survival') {
       controls.append(ctrlGroup('', checkbox('Show 95% CI bands', o.showCI, (v) => { o.showCI = v; rerender(); })));
@@ -1829,24 +1831,35 @@
       document.addEventListener('mouseup', up);
     });
   }
-  // hover tooltip for bar charts — mean / median / mode / range per group, at a glance.
-  // Reads data-* attributes off the transparent .cat-hit rects emitted by Charts.barChart.
-  function enableBarTooltip(canvas) {
+  // Hover tooltip for figures. A data point under the cursor shows its own value(s)
+  // (charts.js stamps them as data-pt); anywhere else over a bar shows that bar's
+  // mean / median / mode / range, read off the transparent .cat-hit rects.
+  function enableChartTooltip(canvas) {
     const ensureTip = () => {
       let t = document.getElementById('chart-tip');
       if (!t) { t = el('div', { class: 'chart-tip', id: 'chart-tip' }); document.body.appendChild(t); }
       return t;
     };
-    const hide = () => { const t = document.getElementById('chart-tip'); if (t) t.style.display = 'none'; };
+    const hide = () => { const t = document.getElementById('chart-tip'); if (t) t.style.display = 'none'; clearHoverRing(canvas); };
     canvas.addEventListener('mousemove', (e) => {
-      const hit = e.target.closest && e.target.closest('.cat-hit[data-tip]');
-      if (!hit || canvas.classList.contains('dragging')) { hide(); return; }
-      const d = hit.dataset;
+      if (canvas.classList.contains('dragging')) { hide(); return; }
+      let title, rows;
+      const pt = hoverPointAt(canvas, e);
+      if (pt) {
+        title = pt.tip.t; rows = pt.tip.r;
+        showHoverRing(canvas, pt);
+      } else {
+        clearHoverRing(canvas);
+        const hit = e.target.closest && e.target.closest('.cat-hit[data-tip]');
+        if (!hit) { hide(); return; }
+        const d = hit.dataset;
+        title = d.name;
+        rows = [['Mean', d.mean], ['Median', d.median], ['Mode', d.mode], ['Range', d.range], ['n', d.n]];
+      }
       const tip = ensureTip();
       tip.innerHTML = '';
-      tip.append(el('div', { class: 'tip-title' }, d.name));
-      [['Mean', d.mean], ['Median', d.median], ['Mode', d.mode], ['Range', d.range], ['n', d.n]]
-        .forEach(([k, v]) => tip.append(el('div', { class: 'tip-row' }, el('span', {}, k), el('b', {}, v))));
+      tip.append(el('div', { class: 'tip-title' }, title));
+      rows.forEach(([k, v]) => tip.append(el('div', { class: 'tip-row' }, el('span', {}, k), el('b', {}, v))));
       tip.style.display = 'block';
       const pad = 14, tw = tip.offsetWidth, th = tip.offsetHeight;
       let left = e.clientX + pad, top = e.clientY + pad;
@@ -1858,6 +1871,60 @@
     canvas.addEventListener('mouseleave', hide);
     canvas.addEventListener('mousedown', hide);   // don't cover the chart while dragging to reorder
   }
+  // A point counts as hovered within this many screen px of its marker's edge.
+  const HOVER_SLOP = 3;
+  // The figure's hoverable points — centre, marker radius and read-out in figure
+  // (viewBox) units — cached on its <svg>, which every redraw replaces. Points the
+  // plot clips away (values outside a custom axis range) are left out.
+  function hoverPoints(svg) {
+    if (svg._hoverPts) return svg._hoverPts;
+    const clips = new Map(), out = [];
+    const clipOf = (node) => {
+      const g = node.closest('[clip-path]');
+      if (!g) return null;
+      if (!clips.has(g)) {
+        const m = /url\(#([^)]+)\)/.exec(g.getAttribute('clip-path') || ''), r = m && svg.querySelector(`[id="${m[1]}"] > rect`);
+        clips.set(g, r ? { x: +r.getAttribute('x'), y: +r.getAttribute('y'), w: +r.getAttribute('width'), h: +r.getAttribute('height') } : null);
+      }
+      return clips.get(g);
+    };
+    svg.querySelectorAll('[data-pt]').forEach((node) => {
+      const x = +node.getAttribute('data-px'), y = +node.getAttribute('data-py');
+      if (!isFinite(x) || !isFinite(y)) return;   // not drawn (e.g. ≤ 0 on a log axis)
+      let tip = null, r = 0;
+      try { tip = JSON.parse(node.getAttribute('data-pt')); const b = node.getBBox(); r = Math.max(b.width, b.height) / 2; } catch (_) { return; }
+      if (!tip || !Array.isArray(tip.r)) return;
+      const c = clipOf(node);
+      if (c && (x < c.x || x > c.x + c.w || y < c.y || y > c.y + c.h)) return;
+      out.push({ x, y, r, tip });
+    });
+    return (svg._hoverPts = out);
+  }
+  // The point under the cursor (nearest marker edge, within HOVER_SLOP), or null.
+  // Points sit under the transparent .cat-hit drag rects, so this is a distance
+  // test rather than the event target.
+  function hoverPointAt(canvas, ev) {
+    const svg = canvas.querySelector('svg');
+    const ctm = svg && svg.getScreenCTM && svg.getScreenCTM();
+    if (!ctm) return null;
+    const pts = hoverPoints(svg);
+    if (!pts.length) return null;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
+    const slop = HOVER_SLOP / (Math.hypot(ctm.a, ctm.b) || 1);
+    let best = null, bestD = Infinity;
+    pts.forEach((q) => { const d = Math.hypot(q.x - p.x, q.y - p.y) - q.r; if (d <= slop && d < bestD) { bestD = d; best = q; } });
+    return best;
+  }
+  // Ring around the hovered point so it is clear which marker the tooltip describes.
+  // Exports rebuild the SVG from the spec, so the ring never reaches a saved figure.
+  function showHoverRing(canvas, pt) {
+    const svg = canvas.querySelector('svg');
+    if (!svg) return;
+    let ring = svg.querySelector('.pt-hover-ring');
+    if (!ring) { ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle'); ring.setAttribute('class', 'pt-hover-ring'); svg.appendChild(ring); }
+    ring.setAttribute('cx', pt.x); ring.setAttribute('cy', pt.y); ring.setAttribute('r', (pt.r + 2.5).toFixed(2));
+  }
+  function clearHoverRing(canvas) { const ring = canvas.querySelector('.pt-hover-ring'); if (ring) ring.remove(); }
 
   function exportSVG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
   function exportPNG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }

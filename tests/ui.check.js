@@ -254,4 +254,57 @@ ok('grouped bar clusters sit close together, and turning compact spacing off res
   return viewWidth(svg) < 580 && clusterGap < 45 && clusterGap > 20 && legacyGap > 80;
 })());
 
+// Every drawn data point carries its hover read-out (a title and [label, value] rows
+// as JSON in data-pt), stamped after its centre so the hit-test attributes stay put.
+const unescAttr = (s) => s.replace(/&quot;|&lt;|&gt;|&amp;/g, (e) => ({ '&quot;': '"', '&lt;': '<', '&gt;': '>', '&amp;': '&' }[e]));
+function tipsOf(svg) {
+  return Array.from(svg.matchAll(/(?:data-pg="(\d+)" data-pi="(\d+)" )?data-px="([^"]+)" data-py="([^"]+)" data-pt="([^"]*)"/g),
+    (m) => Object.assign({ g: m[1] == null ? null : +m[1], i: m[2] == null ? null : +m[2], x: +m[3], y: +m[4] }, JSON.parse(unescAttr(m[5]))));
+}
+ok('bar and dot points show their group and exact value on hover', [barSvg, dotSvg].every((svg) => {
+  const tips = tipsOf(svg);
+  return tips.length === pointsOf(svg).length && tips.length === 24 &&
+    tips.every((p) => p.t === crowded[p.g].name && p.r.length === 1 && p.r[0][0] === 'Value' && p.r[0][1] === String(crowded[p.g].values[p.i]));
+}));
+ok('bar charts keep their per-bar stats tooltip, with or without points', (() => {
+  const plain = Charts.barChart(crowded, {}), stats = (svg) => (svg.match(/class="cat-hit" data-i="\d+" data-tip="1" data-name="[^"]+" data-n="\d+" data-mean=/g) || []).length;
+  return tipsOf(plain).length === 0 && stats(plain) === 3 && stats(barSvg) === 3;
+})());
+ok('point values print as entered, without binary float noise', (() => {
+  const tips = tipsOf(Charts.dotPlot([{ name: 'A', values: [0.1 + 0.2, 1.005, -2.5e-7, 123456789] }], {}));
+  return JSON.stringify(tips.map((p) => p.r[0][1])) === JSON.stringify(['0.3', '1.005', '-2.5e-7', '123456789']);
+})());
+ok('point read-outs survive quotes and markup in group names', (() => {
+  const name = 'A "quoted" <b>&amp;</b> group';
+  const tips = tipsOf(Charts.barChart([{ name, values: [1, 2, 3] }], { showPoints: true }));
+  return tips.length === 3 && tips.every((p) => p.t === name);
+})());
+ok('XY points show their X and Y values under the axis names', (() => {
+  const tips = tipsOf(Charts.xyPlot([1, 2.5, 4], [10, 20, 35], { xLabel: 'Dose (mg)', yLabel: 'Response' }));
+  const plain = tipsOf(Charts.xyPlot([1, 2], [3, 4], {}));
+  return tips.length === 3 && tips[1].t === 'Point 2' && JSON.stringify(tips[1].r) === JSON.stringify([['Dose (mg)', '2.5'], ['Response', '20']]) &&
+    JSON.stringify(plain[0].r) === JSON.stringify([['X', '1'], ['Y', '3']]);
+})());
+ok('line-plot points show the mean, its error and n for their cell', (() => {
+  const tips = tipsOf(line), first = tips.find((p) => p.g === 0 && p.i === 0);
+  const sd = tipsOf(Charts.groupedLine(cells, rows, cols, { errorType: 'sd' })).find((p) => p.g === 1 && p.i === 2);
+  const none = tipsOf(Charts.groupedLine(cells, rows, cols, { errorType: 'none' }))[0];
+  const single = tipsOf(Charts.groupedLine([[[4.25]]], ['Day 0'], ['WT'], {}))[0];
+  return tips.length === 6 && first.t === 'WT · Day 0' && JSON.stringify(first.r) === JSON.stringify([['Mean', '2'], ['± SEM', '0.5774'], ['n', '3']]) &&
+    sd.t === 'Mutant · Day 14' && JSON.stringify(sd.r) === JSON.stringify([['Mean', '9'], ['± SD', '1'], ['n', '3']]) &&
+    JSON.stringify(none.r) === JSON.stringify([['Mean', '2'], ['n', '3']]) && JSON.stringify(single.r) === JSON.stringify([['Value', '4.25']]);
+})());
+ok('before–after points show the whole pair and its change', (() => {
+  const tips = tipsOf(Charts.pairedPlot(['5', '', '8.2'], ['7.1', '3', '6'], { labelA: 'Pre', labelB: 'Post' }));
+  const row = (p) => JSON.stringify([p.t, p.r]);
+  return tips.length === 4 && row(tips[0]) === row(tips[1]) && row(tips[2]) === row(tips[3]) &&
+    row(tips[0]) === JSON.stringify(['Pair 1', [['Pre', '5'], ['Post', '7.1'], ['Change', '+2.1']]]) &&
+    row(tips[2]) === JSON.stringify(['Pair 2', [['Pre', '8.2'], ['Post', '6'], ['Change', '-2.2']]]);
+})());
+ok('box-plot outliers show their value; the box itself has none', (() => {
+  const svg = Charts.boxPlot([{ name: 'A', values: [10, 11, 12, 11, 10, 12, 11, 10, 11, 12, 11, 10, 40, 40, 40] }], {});
+  const tips = tipsOf(svg), cx = Array.from(svg.matchAll(/class="box-outlier" cx="([-\d.]+)"/g), (m) => +m[1]);
+  return tips.length === 3 && tips.every((p, k) => p.t === 'A' && JSON.stringify(p.r) === JSON.stringify([['Outlier', '40']]) && Math.abs(p.x - cx[k]) < 0.01);
+})());
+
 console.log(`\n${pass} UI/data checks passed`);
