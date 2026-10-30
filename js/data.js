@@ -15,6 +15,9 @@ const DataLib = (function () {
       this.notes = ''; // free-text notes for this dataset (shown beside the sheet)
       this.columns = [];
       this.rows = [];
+      // Prism-style row titles: one free-text label per row, shown as the leftmost
+      // "Sample ID" column of Column/XY/Survival sheets. Never part of an analysis.
+      this.sampleIds = [];
       if (type === 'column') this.setColumns(['Group A', 'Group B']);
       else if (type === 'xy') this.setColumns(['X', 'Y']);
       else if (type === 'survival') this.setColumns(['Time', 'Status', 'Group']);
@@ -55,20 +58,50 @@ const DataLib = (function () {
       return { rowNames, colNames: this.groupNames.slice(), cells };
     }
 
-    // Swap rows and columns of the data (Excel-style transpose).
+    // ----- sample IDs (row titles) -----
+    // Grouped sheets use rowTitles as their row factor instead, so they have no ID column.
+    hasSampleIdColumn() { return this.type !== 'grouped'; }
+    getSampleId(r) { const v = this.sampleIds[r]; return v == null ? '' : String(v); }
+    setSampleId(r, v) {
+      while (this.rows.length <= r) this.addRow();
+      while (this.sampleIds.length < r) this.sampleIds.push('');
+      this.sampleIds[r] = v == null ? '' : String(v);
+    }
+    // One label per row (blank where none was entered).
+    sampleIdList() { return this.rows.map((_, r) => this.getSampleId(r)); }
+    hasSampleIds() { return this.sampleIds.some((v) => v != null && String(v).trim() !== ''); }
+    // groups(), plus each group's sample IDs aligned with its values, so a plotted
+    // point can name its row. Blank cells are skipped by groups(), so value index
+    // != row index. Groups carry no `ids` when the table has no sample IDs.
+    labeledGroups() {
+      const gs = this.groups();
+      if (!this.hasSampleIds()) return gs;
+      let k = 0;
+      this.columns.forEach((_, c) => {
+        const ids = [];
+        this.rawColumn(c).forEach((v, r) => { if (v !== '' && !Number.isNaN(Number(v))) ids.push(this.getSampleId(r).trim()); });
+        if (ids.length) gs[k++].ids = ids;
+      });
+      return gs;
+    }
+
+    // Swap rows and columns of the data (Excel-style transpose). As in Prism,
+    // sample IDs (row titles) become column names and column names become sample IDs.
     transpose() {
       if (this.type === 'grouped') { this._transposeGrouped(); return; }
       const nC = this.columns.length;
       let nR = 0;
-      for (let r = 0; r < this.rows.length; r++) if (this.rows[r].some((v) => String(v).trim() !== '')) nR = r + 1;
+      for (let r = 0; r < this.rows.length; r++) if (this.rows[r].some((v) => String(v).trim() !== '') || this.getSampleId(r).trim() !== '') nR = r + 1;
       const newColCount = Math.max(1, nR);
       const get = (r, c) => (this.rows[r] && this.rows[r][c] != null ? this.rows[r][c] : '');
       const names = [];
-      for (let i = 0; i < newColCount; i++) names.push(this.type === 'xy' ? (i === 0 ? 'X' : 'Y' + i) : 'Group ' + String.fromCharCode(65 + i));
+      for (let i = 0; i < newColCount; i++) names.push(this.getSampleId(i).trim() || (this.type === 'xy' ? (i === 0 ? 'X' : 'Y' + i) : 'Group ' + String.fromCharCode(65 + i)));
+      const newIds = this.columns.map((c) => c.name);
       const newRows = [];
       for (let c = 0; c < nC; c++) { const row = []; for (let r = 0; r < newColCount; r++) row.push(get(r, c)); newRows.push(row); }
       this.setColumns(names);
       this.rows = newRows;
+      this.sampleIds = newIds;
       this.ensureRows(Math.max(8, newRows.length));
     }
     // Grouped transpose = swap the row factor and the column (group) factor.
@@ -108,7 +141,10 @@ const DataLib = (function () {
     }
     addRow() {
       if (this.type === 'grouped') { this.rows.push(new Array(this.width()).fill('')); this.rowTitles.push('Row ' + this.rows.length); }
-      else this.rows.push(new Array(this.columns.length).fill(''));
+      else {
+        this.rows.push(new Array(this.columns.length).fill(''));
+        while (this.sampleIds.length < this.rows.length) this.sampleIds.push('');
+      }
     }
     ensureRows(n) { while (this.rows.length < n) this.addRow(); }
     ensureSize(r, c) {
@@ -338,6 +374,8 @@ const DataLib = (function () {
     t.name = o.name;
     t.type = o.type;
     t.notes = o.notes || '';
+    // Projects saved before sample IDs existed have no field: every row is unlabeled.
+    t.sampleIds = Array.isArray(o.sampleIds) ? o.sampleIds.map((v) => (v == null ? '' : String(v))) : [];
     if (o.type === 'grouped') {
       t.groupNames = o.groupNames || ['Group A', 'Group B'];
       t.nsub = o.nsub || 3;

@@ -323,6 +323,10 @@
   function columnHeader(table) {
     const thead = el('thead'); const hr = el('tr');
     hr.append(el('th', { class: 'rowhead' }, '#'));
+    if (table.hasSampleIdColumn()) {
+      hr.append(el('th', { class: 'sampleid-head', title: 'Sample ID — a label for each row (like Prism row titles). Not used in any calculation.' },
+        el('div', { class: 'colhead' }, el('div', { class: 'sampleid-label' }, 'Sample ID'))));
+    }
     table.columns.forEach((col, ci) => {
       const roleLabel = table.type === 'xy' ? (col.role === 'x' ? 'X' : 'Y' + ci) : table.type === 'survival' ? col.role : '';
       const nameInput = el('input', { class: 'colname', value: col.name, title: 'Click to rename this column (right-click for options)',
@@ -382,6 +386,8 @@
   function buildSheet(table) {
     const grouped = table.type === 'grouped';
     const dataCols = grouped ? table.groupNames.length * table.nsub : table.columns.length;
+    // The Sample ID column is grid column -1, so data columns keep their model indices.
+    const firstCol = table.hasSampleIdColumn() ? -1 : 0;
     const wrap = el('div', { class: 'grid-wrap sheet-wrap', tabindex: '0' });
     const tbl = el('table', { class: 'grid sheet' });
     tbl.append(grouped ? groupedHeader(table) : columnHeader(table));
@@ -393,6 +399,9 @@
         tr.append(el('td', { class: 'cat rowtitle' },
           el('input', { class: 'titleinput', value: table.rowTitles[ri] || '', placeholder: 'Row ' + (ri + 1), oninput: (e) => { table.rowTitles[ri] = e.target.value; tableChanged(table); } })));
       }
+      if (firstCol < 0) {
+        tr.append(el('td', { class: 'dcell sampleid', 'data-r': ri, 'data-c': -1 }, el('div', { class: 'cellval' }, table.getSampleId(ri))));
+      }
       for (let c = 0; c < dataCols; c++) {
         const td = el('td', { class: 'dcell', 'data-r': ri, 'data-c': c });
         td.append(el('div', { class: 'cellval' }, row[c] == null ? '' : String(row[c])));
@@ -402,14 +411,15 @@
     });
     tbl.append(tbody);
     wrap.append(tbl);
-    const ctrl = new SheetController(wrap, tbl, table, dataCols);
+    const ctrl = new SheetController(wrap, tbl, table, dataCols, firstCol);
     if (pendingSel && pendingSel.tableId === table.id) { ctrl.restore(pendingSel); pendingSel = null; }
     return wrap;
   }
 
   class SheetController {
-    constructor(wrap, tbl, table, dataCols) {
+    constructor(wrap, tbl, table, dataCols, firstCol = 0) {
       this.wrap = wrap; this.tbl = tbl; this.table = table; this.cols = dataCols; this.nrows = table.rows.length;
+      this.c0 = firstCol; // -1 when the sheet has a Sample ID column
       this.sel = null; this.active = null; this.anchor = null; this.dragging = false; this.editing = false;
       wrap.addEventListener('mousedown', (e) => this.onMouseDown(e));
       wrap.addEventListener('mouseover', (e) => this.onMouseOver(e));
@@ -420,6 +430,9 @@
       wrap.addEventListener('paste', (e) => this.onPaste(e));
       this._up = () => { this.dragging = false; document.removeEventListener('mouseup', this._up); };
     }
+    // Grid column -1 is the Sample ID column; 0.. are the table's data columns.
+    get(r, c) { return c < 0 ? this.table.getSampleId(r) : this.table.getCell(r, c); }
+    set(r, c, v) { if (c < 0) this.table.setSampleId(r, v); else this.table.setCell(r, c, v); }
     cellTd(r, c) { return this.tbl.querySelector(`td.dcell[data-r="${r}"][data-c="${c}"]`); }
     tdFrom(e) { const td = e.target.closest && e.target.closest('td.dcell'); return td && this.tbl.contains(td) ? td : null; }
     coords(td) { return { r: +td.dataset.r, c: +td.dataset.c }; }
@@ -466,26 +479,27 @@
       else if (k.length === 1 && !e.altKey) { e.preventDefault(); this.enterEdit(k); }
     }
     move(dr, dc) {
-      let r = this.active.r + dr, c = clamp(this.active.c + dc, 0, this.cols - 1);
+      let r = this.active.r + dr, c = clamp(this.active.c + dc, this.c0, this.cols - 1);
       if (r < 0) r = 0;
       if (r > this.nrows - 1) { this.table.addRow(); this.rerenderKeep({ r, c }); return; }
       this.active = { r, c }; this.anchor = { r, c }; this.sel = { r1: r, c1: c, r2: r, c2: c }; this.highlight(); this.scrollTo(r, c);
     }
     moveOrExtend(dr, dc, shift) {
       if (!shift) return this.move(dr, dc);
-      const r = clamp(this.active.r + dr, 0, this.nrows - 1), c = clamp(this.active.c + dc, 0, this.cols - 1);
+      const r = clamp(this.active.r + dr, 0, this.nrows - 1), c = clamp(this.active.c + dc, this.c0, this.cols - 1);
       this.active = { r, c }; this.sel = rectOf(this.anchor, { r, c }); this.highlight(); this.scrollTo(r, c);
     }
-    selectAll() { this.active = { r: 0, c: 0 }; this.anchor = { r: 0, c: 0 }; this.sel = { r1: 0, c1: 0, r2: this.nrows - 1, c2: this.cols - 1 }; this.highlight(); }
+    // Select everything, sample IDs included, so a select-all copy/paste keeps rows labeled.
+    selectAll() { const c0 = this.c0; this.active = { r: 0, c: c0 }; this.anchor = { r: 0, c: c0 }; this.sel = { r1: 0, c1: c0, r2: this.nrows - 1, c2: this.cols - 1 }; this.highlight(); }
     clearSel() {
       const s = this.sel; if (!s) return;
-      for (let r = s.r1; r <= s.r2; r++) for (let c = s.c1; c <= s.c2; c++) { this.table.setCell(r, c, ''); const td = this.cellTd(r, c); if (td) td.querySelector('.cellval').textContent = ''; }
+      for (let r = s.r1; r <= s.r2; r++) for (let c = s.c1; c <= s.c2; c++) { this.set(r, c, ''); const td = this.cellTd(r, c); if (td) td.querySelector('.cellval').textContent = ''; }
       tableChanged(this.table);
     }
     enterEdit(initial) {
       const { r, c } = this.active; const td = this.cellTd(r, c); if (!td) return;
       this.editing = true;
-      const cur = this.table.getCell(r, c);
+      const cur = this.get(r, c);
       const inp = el('input', { class: 'celledit', value: initial != null ? initial : (cur == null ? '' : cur) });
       td.innerHTML = ''; td.append(inp); inp.focus();
       if (initial == null) inp.select();
@@ -514,20 +528,20 @@
     commitEdit() {
       const { r, c } = this.active; const td = this.cellTd(r, c);
       const inp = td && td.querySelector('input.celledit'); const val = inp ? inp.value : '';
-      this.editing = false; this.table.setCell(r, c, val);
+      this.editing = false; this.set(r, c, val);
       if (td) { td.innerHTML = ''; td.append(el('div', { class: 'cellval' }, val)); }
       tableChanged(this.table); this.highlight(); this.wrap.focus();
     }
     cancelEdit() {
       const { r, c } = this.active; const td = this.cellTd(r, c); this.editing = false;
-      const cur = this.table.getCell(r, c);
+      const cur = this.get(r, c);
       if (td) { td.innerHTML = ''; td.append(el('div', { class: 'cellval' }, cur == null ? '' : String(cur))); }
       this.highlight(); this.wrap.focus();
     }
     onCopy(e, cut) {
       if (this.editing || e.target.tagName === 'INPUT' || !this.sel) return;
       const s = this.sel; const lines = [];
-      for (let r = s.r1; r <= s.r2; r++) { const cells = []; for (let c = s.c1; c <= s.c2; c++) { const v = this.table.getCell(r, c); cells.push(v == null ? '' : String(v)); } lines.push(cells.join('\t')); }
+      for (let r = s.r1; r <= s.r2; r++) { const cells = []; for (let c = s.c1; c <= s.c2; c++) { const v = this.get(r, c); cells.push(v == null ? '' : String(v)); } lines.push(cells.join('\t')); }
       e.clipboardData.setData('text/plain', lines.join('\n')); e.preventDefault();
       if (cut) this.clearSel();
     }
@@ -541,7 +555,7 @@
     pasteGrid(text) {
       const start = this.active || { r: 0, c: 0 };
       const parsed = D.parseDelimited(text);
-      parsed.rows.forEach((rrow, i) => rrow.forEach((v, j) => this.table.setCell(start.r + i, start.c + j, v)));
+      parsed.rows.forEach((rrow, i) => rrow.forEach((v, j) => this.set(start.r + i, start.c + j, v)));
       tableChanged(this.table);
       const nr = parsed.rows.length, nc = parsed.rows[0] ? parsed.rows[0].length : 0;
       pendingSel = { tableId: this.table.id, sel: { r1: start.r, c1: start.c, r2: start.r + nr - 1, c2: start.c + nc - 1 }, active: { r: start.r, c: start.c } };
@@ -555,7 +569,7 @@
         const grid = D.parseDelimited(text).rows;
         const R = grid.length, Cc = Math.max(...grid.map((r) => r.length), 1);
         const start = this.active || { r: 0, c: 0 };
-        for (let i = 0; i < Cc; i++) for (let j = 0; j < R; j++) this.table.setCell(start.r + i, start.c + j, grid[j][i] != null ? grid[j][i] : '');
+        for (let i = 0; i < Cc; i++) for (let j = 0; j < R; j++) this.set(start.r + i, start.c + j, grid[j][i] != null ? grid[j][i] : '');
         tableChanged(this.table);
         pendingSel = { tableId: this.table.id, sel: { r1: start.r, c1: start.c, r2: start.r + Cc - 1, c2: start.c + R - 1 }, active: { r: start.r, c: start.c } };
         renderContent();
@@ -567,9 +581,9 @@
     }
     rerenderKeep(cell) { pendingSel = { tableId: this.table.id, sel: { r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c }, active: cell }; tableChanged(this.table, true); }
     restore(p) {
-      const maxR = this.nrows - 1, maxC = this.cols - 1;
-      this.active = { r: clamp(p.active.r, 0, maxR), c: clamp(p.active.c, 0, maxC) }; this.anchor = this.active;
-      const s = p.sel; this.sel = { r1: clamp(s.r1, 0, maxR), c1: clamp(s.c1, 0, maxC), r2: clamp(s.r2, 0, maxR), c2: clamp(s.c2, 0, maxC) };
+      const maxR = this.nrows - 1, maxC = this.cols - 1, c0 = this.c0;
+      this.active = { r: clamp(p.active.r, 0, maxR), c: clamp(p.active.c, c0, maxC) }; this.anchor = this.active;
+      const s = p.sel; this.sel = { r1: clamp(s.r1, 0, maxR), c1: clamp(s.c1, c0, maxC), r2: clamp(s.r2, 0, maxR), c2: clamp(s.c2, c0, maxC) };
       this.highlight(); this.wrap.focus(); this.scrollTo(this.active.r, this.active.c);
     }
   }
@@ -932,7 +946,8 @@
     const hypothesis = () => hypothesisText(table, kind, alternative, spec.mu0 === undefined ? 0 : spec.mu0);
     const pLabel = 'P value (' + tailName(alternative) + ')';
     const reportP = (p) => `${pText(p)} (${tailName(alternative)}; H₁: ${hypothesis()})`;
-    const groups = table.type === 'column' ? table.groups() : (table.type === 'grouped' ? groupedUnits(table) : null);
+    // Column groups carry their sample IDs (aligned with values) for graph point read-outs.
+    const groups = table.type === 'column' ? table.labeledGroups() : (table.type === 'grouped' ? groupedUnits(table) : null);
     const wrap = (title, node, graphSpec) => {
       if (DIRECTIONAL_TESTS.has(kind)) {
         const body = $('.result-body', node);
@@ -1013,7 +1028,7 @@
         hypothesisVerdict(table, spec, alternative, r.p, 'The paired difference is statistically significant.', 'No significant paired difference.'),
         statsTable([['Mean difference (95% CI)', `${num(r.meanDiff)}  (${num(r.ci95lo)} – ${num(r.ci95hi)})`], ['SD of differences', num(r.sdDiff)], ['n pairs', r.n], ['t', num(r.t, 4)], ['df', r.df], [pLabel, fmtP(r.p)], ["Cohen's dz", num(r.cohenDz, 3)]]),
         apaLine(`t(${r.df}) = ${num(r.t, 3)}, ${reportP(r.p)}, dz = ${num(r.cohenDz, 2)}.`));
-      return wrap(`Paired t: ${a.name} vs ${b.name}`, node, graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: a.name, labelB: b.name, colA: rawA, colB: rawB }));
+      return wrap(`Paired t: ${a.name} vs ${b.name}`, node, graphSpec('paired', groups, Object.assign({ title: table.name, yLabel: 'Value', labelA: a.name, labelB: b.name, colA: rawA, colB: rawB }, rowIdsOpt(table))));
     }
 
     if (kind === 'mannwhitney') {
@@ -1039,7 +1054,7 @@
         el('div', { class: 'note' }, 'Normal approximation with continuity and tie correction; zero differences are omitted.'));
       const gspec = oneSample
         ? graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none' })
-        : graphSpec('paired', groups, { title: table.name, yLabel: 'Value', labelA: groups[0].name, labelB: groups[1].name, colA: rawA, colB: rawB });
+        : graphSpec('paired', groups, Object.assign({ title: table.name, yLabel: 'Value', labelA: groups[0].name, labelB: groups[1].name, colA: rawA, colB: rawB }, rowIdsOpt(table)));
       return wrap('Wilcoxon signed-rank', node, gspec);
     }
 
@@ -1392,14 +1407,20 @@
   }
 
   // ---------- graph spec builders ----------
+  // Sample IDs ride along as data (group.ids, spec.pointIds, opts.rowIds), so linked
+  // graphs rebuild them from the table on every edit. Tables without IDs add nothing.
   function graphSpec(chartType, groups, opts) {
-    return { chartType, groups: groups.map((g) => ({ name: g.name, values: g.values.slice() })), opts: Object.assign({ errorType: 'sem' }, opts) };
+    return { chartType, groups: groups.map((g) => Object.assign({ name: g.name, values: g.values.slice() }, g.ids ? { ids: g.ids.slice() } : {})), opts: Object.assign({ errorType: 'sem' }, opts) };
   }
+  // Before–after plots pair raw rows, so they take one ID per row.
+  function rowIdsOpt(table) { return table.hasSampleIds() ? { rowIds: table.sampleIdList() } : {}; }
   function xySpec(table, regression, annotation) {
     const xr = table.rawColumn(0), yr = table.rawColumn(1);
-    const xs = [], ys = [];
-    for (let i = 0; i < xr.length; i++) if (xr[i] !== '' && yr[i] !== '' && !isNaN(+xr[i]) && !isNaN(+yr[i])) { xs.push(+xr[i]); ys.push(+yr[i]); }
-    return { chartType: 'xy', xs, ys, regression, opts: { title: table.name, xLabel: table.columns[0].name, yLabel: table.columns[1].name, annotation } };
+    const xs = [], ys = [], ids = [];
+    for (let i = 0; i < xr.length; i++) if (xr[i] !== '' && yr[i] !== '' && !isNaN(+xr[i]) && !isNaN(+yr[i])) { xs.push(+xr[i]); ys.push(+yr[i]); ids.push(table.getSampleId(i).trim()); }
+    const spec = { chartType: 'xy', xs, ys, regression, opts: { title: table.name, xLabel: table.columns[0].name, yLabel: table.columns[1].name, annotation } };
+    if (ids.some((id) => id !== '')) spec.pointIds = ids;
+    return spec;
   }
 
   function buildSVG(spec) {
@@ -1409,7 +1430,7 @@
     if (spec.chartType === 'dot') return Charts.dotPlot(spec.groups, o);
     if (spec.chartType === 'box') return Charts.boxPlot(spec.groups, o);
     if (spec.chartType === 'paired') return Charts.pairedPlot(o.colA, o.colB, o);
-    if (spec.chartType === 'xy') return Charts.xyPlot(spec.xs, spec.ys, Object.assign({ regression: spec.regression }, o));
+    if (spec.chartType === 'xy') return Charts.xyPlot(spec.xs, spec.ys, Object.assign({ regression: spec.regression, pointIds: spec.pointIds }, o));
     if (spec.chartType === 'survival') return Charts.survivalPlot(spec.curves, o);
     if (spec.chartType === 'grouped') return Charts.groupedBar(spec.cells, spec.rowNames, spec.colNames, o);
     if (spec.chartType === 'grouped-line') return Charts.groupedLine(spec.cells, spec.rowNames, spec.colNames, o);
@@ -1942,7 +1963,7 @@
       const cm = table.cellsMatrix();
       return { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem' } };
     }
-    return graphSpec('bar', table.groups(), { title: table.name, yLabel: 'Value', errorType: 'sem' });
+    return graphSpec('bar', table.labeledGroups(), { title: table.name, yLabel: 'Value', errorType: 'sem' });
   }
   function quickGraph(table, options = {}) {
     if (!table.hasData()) { toast('Enter or paste some data first'); return null; }
@@ -2115,7 +2136,8 @@
   function snapshot() {
     return {
       v: 1, counter: App.counter,
-      tables: App.tables.map((t) => ({ id: t.id, type: t.type, name: t.name, notes: t.notes, columns: t.columns, rows: t.rows, groupNames: t.groupNames, nsub: t.nsub, rowTitles: t.rowTitles })),
+      tables: App.tables.map((t) => ({ id: t.id, type: t.type, name: t.name, notes: t.notes, columns: t.columns, rows: t.rows, groupNames: t.groupNames, nsub: t.nsub, rowTitles: t.rowTitles,
+        sampleIds: t.sampleIds.some((v) => v != null && v !== '') ? t.sampleIdList() : undefined })),
       results: App.results.map((r) => ({ id: r.id, name: r.name, tableId: r.tableId, kind: r.kind, spec: r.spec, graphId: r.graphId })),
       graphs: App.graphs.map((g) => ({ id: g.id, name: g.name, tableId: g.tableId, resultId: g.resultId, spec: g.spec })),
       active: App.active,

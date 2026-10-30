@@ -204,6 +204,13 @@ td.dcell .cellval {
   padding: 6px 8px; min-width: 74px; min-height: 30px; font-family: var(--mono); font-size: 12.5px;
   text-align: right; color: var(--ink); white-space: nowrap; overflow: hidden; box-sizing: border-box;
 }
+/* Sample ID column (Prism-style row titles): shaded, left-aligned text labels */
+table.grid.sheet thead th.sampleid-head { background: #f1f5f9; border-right: 2px solid var(--line-strong); }
+th.sampleid-head .sampleid-label { padding: 7px 8px; font-size: 12.5px; color: var(--ink); text-align: left; }
+td.dcell.sampleid { background: #f8fafc; } /* below .sel so selection still shows */
+table.grid.sheet td.dcell.sampleid { border-right: 2px solid var(--line-strong); }
+td.dcell.sampleid .cellval { min-width: 110px; max-width: 260px; text-overflow: ellipsis; font-family: var(--sans); text-align: left; }
+td.dcell.sampleid input.celledit { font-family: var(--sans); text-align: left; }
 td.dcell.sel { background: rgba(13,148,136,.13); }
 td.dcell.active { box-shadow: inset 0 0 0 2px var(--accent); }
 td.dcell.active.sel { background: rgba(13,148,136,.20); }
