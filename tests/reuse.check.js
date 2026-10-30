@@ -13,6 +13,29 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'statlab-reuse-'));
 app.setPath('userData', temp);
 app.setPath('sessionData', temp);
 
+const CHAR_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+
+function escapeUnsafeChars(str) {
+  return str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (x) => CHAR_MAP[x]);
+}
+
+function jsLiteral(value) {
+  return escapeUnsafeChars(JSON.stringify(value));
+}
+
 let win, pass = 0;
 const run = (code) => win.webContents.executeJavaScript(code, true);
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
@@ -240,7 +263,7 @@ app.whenReady().then(async () => {
   // "(copy)" is already the separate analysis copy's graph, so this one is numbered.
   ok('the copy gets an unused copy name and is listed right below the original', copy.name === original.name + ' (copy 2)' &&
     s.graphs.findIndex((g) => g.id === copy.id) === s.graphs.findIndex((g) => g.id === original.id) + 1 &&
-    await run(`(() => { const items = Array.from(document.querySelectorAll('.nav-graphs .nav-item')).map((x) => x.dataset.id); return items.indexOf(${JSON.stringify(copy.id)}) === items.indexOf(${JSON.stringify(original.id)}) + 1; })()`));
+    await run(`(() => { const items = Array.from(document.querySelectorAll('.nav-graphs .nav-item')).map((x) => x.dataset.id); return items.indexOf(${jsLiteral(copy.id)}) === items.indexOf(${jsLiteral(original.id)}) + 1; })()`));
   // Opening a graph fills in its display defaults, so compare with the original as it is now.
   ok('the copy stays linked to the same analysis and table with the same figure', copy.resultId === welch.id && copy.tableId === tableId && JSON.stringify(copy.spec) === JSON.stringify(s.graphs.find((g) => g.id === original.id).spec));
   ok('the analysis still points at its original graph', s.results.find((r) => r.id === welch.id).graphId === original.id);
