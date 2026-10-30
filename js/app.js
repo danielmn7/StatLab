@@ -89,16 +89,24 @@
     const family = families[fresh];
     return family && family.includes(current) ? current : fresh;
   }
+  // `fresh` is cloned so that several graphs of one analysis (a graph and its
+  // duplicates) never share comparison toggles or other nested state.
   function mergeLinkedGraphSpec(graph, fresh) {
+    fresh = structuredClone(fresh);
     const old = graph.spec || {}, oldOpts = old.opts || {}, nextOpts = Object.assign({}, fresh.opts || {});
     LINKED_VISUAL_OPTIONS.forEach((key) => { if (oldOpts[key] !== undefined) nextOpts[key] = oldOpts[key]; });
     graph.spec = Object.assign({}, fresh, { chartType: compatibleChartType(old.chartType, fresh.chartType), opts: nextOpts });
   }
-  function linkedGraphFor(result) { return App.graphs.find((g) => g.id === result.graphId || g.resultId === result.id); }
+  // A result owns its graph (result.graphId) plus any duplicates made of it
+  // (graph.resultId). The graph the result points at comes first.
+  function linkedGraphsFor(result) {
+    const graphs = App.graphs.filter((g) => g.id === result.graphId || (g.resultId != null && g.resultId === result.id));
+    return graphs.sort((a, b) => (b.id === result.graphId) - (a.id === result.graphId));
+  }
+  function resultForGraph(graph) { return App.results.find((r) => r.graphId === graph.id || (graph.resultId != null && r.id === graph.resultId)); }
   function invalidateLinkedGraph(result, message) {
-    const graph = linkedGraphFor(result);
-    if (graph) graph.spec = Object.assign({}, graph.spec, {
-      unavailable: message, opts: Object.assign({}, graph.spec.opts, { sig: [] }),
+    linkedGraphsFor(result).forEach((graph) => {
+      graph.spec = Object.assign({}, graph.spec, { unavailable: message, opts: Object.assign({}, graph.spec.opts, { sig: [] }) });
     });
   }
   function refreshLinkedGraphs(table) {
@@ -115,8 +123,7 @@
       result.html = computed.html;
       if (computed.error) invalidateLinkedGraph(result, computed.error);
       else if (computed.graphSpec) {
-        const graph = linkedGraphFor(result);
-        if (graph) { mergeLinkedGraphSpec(graph, computed.graphSpec); resultGraphIds.add(graph.id); }
+        linkedGraphsFor(result).forEach((graph) => { mergeLinkedGraphSpec(graph, computed.graphSpec); resultGraphIds.add(graph.id); });
       }
     });
     App.graphs.filter((g) => g.tableId === table.id && !resultGraphIds.has(g.id) && !tableResults.some((r) => r.graphId === g.id || r.id === g.resultId)).forEach((graph) => {
@@ -154,6 +161,22 @@
     update();
     return toggle;
   }
+  // Results and graphs of one test differ only at the end of their names ("… · Student’s",
+  // "… (copy)"), which a narrow sidebar would cut off. Keep those parts visible: options go
+  // on a second line and a copy/number suffix never truncates. textContent stays the name.
+  function leafLabel(name) {
+    const text = String(name), sep = text.indexOf(' · ');
+    if (sep > 0) {
+      return el('span', { class: 'nav-label nav-label-2line' }, el('span', { class: 'nav-label-main' }, text.slice(0, sep)),
+        el('span', { class: 'nav-label-variant' }, el('span', { class: 'nav-label-sep' }, ' · '), text.slice(sep + 3)));
+    }
+    const suffix = / \((?:copy(?: \d+)?|\d+)\)$/.exec(text);
+    if (suffix && suffix.index > 0) {
+      return el('span', { class: 'nav-label nav-label-suffixed' }, el('span', { class: 'nav-label-main' }, text.slice(0, suffix.index)),
+        el('span', { class: 'nav-label-suffix' }, suffix[0]));
+    }
+    return el('span', { class: 'nav-label' }, text);
+  }
   function renderNavigator() {
     const mk = (item, view, icon, ...kids) => el('button', {
         type: 'button', 'data-view': view, 'data-id': item.id,
@@ -162,7 +185,7 @@
         title: item.name + '\nRight-click for options',
         onclick: () => setActive(view, item.id),
         oncontextmenu: (e) => navContextMenu(e, item, view),
-      }, el('span', { class: 'ico', 'aria-hidden': 'true' }, icon), el('span', { class: 'nav-label' }, item.name), ...kids);
+      }, el('span', { class: 'ico', 'aria-hidden': 'true' }, icon), view === 'data' ? el('span', { class: 'nav-label' }, item.name) : leafLabel(item.name), ...kids);
     const leaves = (items, view, icon) => items.map((item) => el('li', { class: 'nav-entry' }, mk(item, view, icon)));
     const group = (items, view, label, icon, table, index) => {
       const list = el('ul', { id: 'nav-' + view + '-' + index, class: 'nav-list nav-leaves nav-' + (view === 'result' ? 'results' : 'graphs'), 'aria-label': label + ' for ' + table.name }, ...leaves(items, view, icon));
@@ -236,7 +259,7 @@
     const actions = el('div', { class: 'view-actions' },
       el('span', { class: 'muted', style: 'align-self:center;font-size:12px' }, 'Type:'), typeSel,
       el('button', { class: 'btn btn-accent', onclick: () => openAnalyze(table) }, '∑ Analyze'),
-      el('button', { class: 'btn', onclick: () => quickGraph(table) }, '◧ Graph'),
+      el('button', { class: 'btn', title: 'Open this table’s graph — made the first time, then kept in sync with the data. Use ⧉ Duplicate on a graph for a separate version.', onclick: () => quickGraph(table) }, '◧ Graph'),
       el('button', { class: 'btn btn-ghost', title: 'Delete this table and its analyses and graphs', onclick: () => deleteTable(table.id) }, '🗑 Delete'));
     head.append(actions);
     root.append(head);
@@ -784,12 +807,32 @@
       if (g.alt) hb.append(el('div', { style: 'margin-top:5px' }, el('b', {}, 'Alternatives: '), g.alt));
       help.append(hb); box.append(help);
     }
+    updateAnalyzeExisting();
   }
 
+  function analyzeSpec() { return Object.assign({ kind: analyzeState.kind }, normalizeParams(analyzeState.kind, analyzeState.params)); }
   function runAnalyzeFromModal() {
-    const { table, kind, params } = analyzeState;
+    const { table, separate } = analyzeState;
     hideModal('modal-analyze');
-    runAnalysis(table, Object.assign({ kind }, normalizeParams(kind, params)));
+    runAnalysis(table, analyzeSpec(), { separate: !!separate });
+  }
+  // Say up front when Run would only reopen an analysis the table already has, and
+  // offer a deliberate separate copy. Re-evaluated whenever a test or option changes.
+  function updateAnalyzeExisting() {
+    if (!analyzeState) return;
+    const box = $('#analyze-existing'), go = $('#analyze-go');
+    const existing = analyzeState.kind ? findAnalysis(analyzeState.table, analyzeSpec()) : null;
+    box.replaceChildren();
+    box.hidden = !existing;
+    if (!existing) { analyzeState.separate = false; go.textContent = 'Run analysis'; return; }
+    const label = () => { go.textContent = analyzeState.separate ? 'Run as separate copy' : 'Open existing result'; };
+    const separate = el('input', { type: 'checkbox', id: 'analyze-separate', onchange: (e) => { analyzeState.separate = e.target.checked; label(); } });
+    separate.checked = !!analyzeState.separate;
+    box.append(
+      el('span', { class: 'analyze-existing-text' }, 'You already ran this analysis: ', el('b', {}, existing.name),
+        '. It updates automatically when the data changes, so running it again opens it instead of adding a duplicate.'),
+      el('label', { class: 'analyze-existing-copy', for: 'analyze-separate' }, separate, 'Make a separate copy'));
+    label();
   }
   function normalizeParams(kind, p) {
     const out = {};
@@ -814,15 +857,25 @@
   }
 
   // ---------- run analysis ----------
-  function runAnalysis(table, spec) {
+  // One test with the same options on the same table is one analysis. Saved results
+  // and their graphs already recompute on every data edit, so running it again opens
+  // the existing analysis instead of adding an identical copy; { separate: true }
+  // deliberately makes a second one.
+  function runAnalysis(table, spec, options = {}) {
+    const existing = findAnalysis(table, spec);
+    if (existing && !options.separate) { reopenAnalysis(table, existing); return; }
     let res;
     try { res = compute(table, spec); }
     catch (err) { console.error(err); toast('Could not run: ' + err.message); return; }
     if (!res) return;
-    const result = { id: 'res_' + App.counter, name: res.title, tableId: table.id, html: res.html, kind: spec.kind, spec };
+    const resultNames = namesOf(App.results, table.id);
+    const name = existing ? copyName(existing.name, resultNames) : analysisName(table, res.title, spec, resultNames);
+    const result = { id: 'res_' + App.counter, name, tableId: table.id, html: res.html, kind: spec.kind, spec };
     App.results.push(result);
     if (res.graphSpec) {
-      const graph = { id: 'gr_' + App.counter, name: res.graphSpec.opts.title || res.title, tableId: table.id, resultId: result.id, spec: res.graphSpec };
+      // Named after its analysis (the figure title stays the table name) so a table's
+      // graphs can be told apart in the sidebar.
+      const graph = { id: 'gr_' + App.counter, name: uniqueName(name, namesOf(App.graphs, table.id)), tableId: table.id, resultId: result.id, spec: res.graphSpec };
       App.graphs.push(graph);
       result.graphId = graph.id;
     }
@@ -830,6 +883,83 @@
     renderNavigator();
     setActive('result', result.id);
     saveState();
+    if (existing) toast('Made a separate copy of “' + existing.name + '”');
+  }
+  function reopenAnalysis(table, result) {
+    // A graph the user deleted comes back, as it would for a first run.
+    let restored = false;
+    if (!linkedGraphsFor(result).length) {
+      try {
+        const res = compute(table, result.spec);
+        if (res && res.graphSpec && !res.error) {
+          const graph = { id: freshId('gr_'), name: uniqueName(result.name, namesOf(App.graphs, table.id)), tableId: table.id, resultId: result.id, spec: res.graphSpec };
+          App.graphs.push(graph);
+          result.graphId = graph.id;
+          restored = true;
+        }
+      } catch (err) { /* the result view already explains why it cannot be computed */ }
+    }
+    setActive('result', result.id);
+    saveState();
+    toast(restored ? 'Reopened “' + result.name + '” and recreated its graph'
+      : 'Opened your existing “' + result.name + '” — it’s already up to date, so no duplicate was made');
+  }
+  // Fill in the defaults compute() applies, so the guide's sparse specs, the
+  // Analyze dialog's explicit ones and older project files compare equal exactly
+  // when they calculate the same thing.
+  function analysisKey(spec) {
+    const s = Object.assign({}, spec), kind = s.kind;
+    delete s.oneSample; // a guide hint; compute() infers one sample from the table
+    if (DIRECTIONAL_TESTS.has(kind) && s.alternative === undefined) s.alternative = 'two-sided';
+    if (kind === 'unpaired-t') s.welch = !!s.welch; // older specs without a choice ran Student's
+    if ((kind === 'onesample-t' || kind === 'wilcoxon') && s.mu0 === undefined) s.mu0 = 0;
+    if (kind === 'anova') { s.posthoc = s.posthoc || 'tukey'; s.note = !!s.note; }
+    if (kind === 'kruskal') s.posthoc = s.posthoc || 'holm-sidak';
+    if (kind === 'grubbs') s.iterative = !!s.iterative;
+    if (Array.isArray(s.pairs)) s.pairs = s.pairs.map((pair) => pair.slice().sort((a, b) => a - b)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    return JSON.stringify(Object.keys(s).sort().map((k) => [k, s[k]]));
+  }
+  function findAnalysis(table, spec) {
+    const key = analysisKey(spec);
+    return App.results.find((r) => r.tableId === table.id && r.spec && analysisKey(r.spec) === key);
+  }
+  // The options that tell two runs of one test apart, e.g. "Student’s, one-tailed, greater".
+  function analysisVariant(table, spec) {
+    const kind = spec.kind, parts = [];
+    if (kind === 'unpaired-t') parts.push(spec.welch ? 'Welch’s' : 'Student’s');
+    if (kind === 'onesample-t' || (kind === 'wilcoxon' && spec.mu0 !== undefined && table.groups().length === 1)) parts.push('H₀ = ' + num(spec.mu0 === undefined ? 0 : spec.mu0));
+    if (kind === 'anova') {
+      if (spec.posthoc === 'dunnett') { const control = table.groups()[spec.control || 0]; parts.push('Dunnett' + (control ? ' vs ' + control.name : '')); }
+      else if (spec.posthoc === 'custom') parts.push('selected pairs, ' + posthocName(spec.correction || 'sidak'));
+      else parts.push(posthocName(spec.posthoc || 'tukey'));
+    }
+    if (kind === 'kruskal') parts.push((Array.isArray(spec.pairs) ? 'selected pairs, ' : '') + posthocName(spec.posthoc || 'holm-sidak'));
+    if (kind === 'twoway' && spec.phmethod) parts.push(posthocName(spec.phmethod), { colsWithinRow: 'columns within rows', rowsWithinCol: 'rows within columns', colMeans: 'column means', rowMeans: 'row means', cells: 'every cell' }[spec.phdir] || spec.phdir);
+    if ((kind === 'twoway' || kind === 'srh') && spec.rowFactor) parts.push(spec.rowFactor + ' × ' + spec.colFactor);
+    if (kind === 'grubbs') parts.push(spec.iterative ? 'iterative' : 'single outlier');
+    if (DIRECTIONAL_TESTS.has(kind)) parts.push(tailName(spec.alternative || 'two-sided'));
+    return parts.filter(Boolean).join(', ');
+  }
+  // The first run of a test keeps its plain title; later variants add their options.
+  function analysisName(table, title, spec, taken) {
+    if (!taken.has(title)) return title;
+    const variant = analysisVariant(table, spec);
+    return uniqueName(variant ? title + ' · ' + variant : title, taken);
+  }
+  function namesOf(items, tableId) { return new Set(items.filter((x) => x.tableId === tableId).map((x) => x.name)); }
+  function uniqueName(base, taken) {
+    if (!taken.has(base)) return base;
+    let n = 2; while (taken.has(base + ' (' + n + ')')) n++;
+    return base + ' (' + n + ')';
+  }
+  function copyName(name, taken) {
+    const stem = String(name || '').replace(/ \(copy(?: \d+)?\)$/, '');
+    for (let n = 1; ; n++) { const candidate = stem + (n === 1 ? ' (copy)' : ' (copy ' + n + ')'); if (!taken.has(candidate)) return candidate; }
+  }
+  function freshId(prefix) {
+    const used = new Set(App.tables.concat(App.results, App.graphs).map((x) => x.id));
+    let id; do { id = prefix + App.counter++; } while (used.has(id));
+    return id;
   }
 
   function verdict(p, sigText, nsText) {
@@ -1448,10 +1578,16 @@
   // ---------- result view ----------
   function renderResultView(root, result) {
     if (!result) return;
+    const graphs = linkedGraphsFor(result);
+    const viewGraphs = graphs.length === 1 ? el('button', { class: 'btn', onclick: () => setActive('graph', graphs[0].id) }, '◧ View graph')
+      : graphs.length > 1 ? el('button', { class: 'btn', title: 'This analysis has more than one graph', onclick: (e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        showContextMenu(r.left, r.bottom + 4, graphs.map((g) => ({ label: '◧ ' + g.name, onClick: () => setActive('graph', g.id) })));
+      } }, '◧ View graphs (' + graphs.length + ') ▾') : null;
     const head = el('div', { class: 'view-head' },
       el('h1', { class: 'view-title' }, result.name),
       el('div', { class: 'view-actions' },
-        result.graphId ? el('button', { class: 'btn', onclick: () => setActive('graph', result.graphId) }, '◧ View graph') : null,
+        viewGraphs,
         el('button', { class: 'btn', onclick: () => copyResultText(result) }, '⧉ Copy'),
         el('button', { class: 'btn btn-ghost', onclick: () => deleteResult(result.id) }, '🗑 Delete')));
     root.append(head);
@@ -1476,6 +1612,7 @@
       el('div', { class: 'view-actions' },
         srcTable ? el('button', { class: 'btn btn-accent', onclick: () => openAnalyze(srcTable) }, '∑ Analyze') : null,
         srcTable ? el('button', { class: 'btn', onclick: () => setActive('data', srcTable.id) }, '▦ Data') : null,
+        el('button', { class: 'btn', title: 'Make a separate copy to customize on its own — this graph stays as it is', onclick: () => duplicateGraph(graph.id) }, '⧉ Duplicate'),
         el('button', { class: 'btn', disabled: !!graph.spec.unavailable, onclick: () => exportSVG(graph) }, '⭳ SVG'),
         el('button', { class: 'btn', disabled: !!graph.spec.unavailable, onclick: () => exportPNG(graph) }, '⭳ PNG'),
         el('button', { class: 'btn btn-ghost', onclick: () => deleteGraph(graph.id) }, '🗑 Delete')));
@@ -1965,9 +2102,11 @@
     }
     return graphSpec('bar', table.labeledGroups(), { title: table.name, yLabel: 'Value', errorType: 'sem' });
   }
+  // Each table has one quick graph, reused by ◧ Graph and ◧ All. Analysis graphs and
+  // their duplicates belong to a result and are never taken over as the quick graph.
   function quickGraph(table, options = {}) {
     if (!table.hasData()) { toast('Enter or paste some data first'); return null; }
-    let graph = App.graphs.find((g) => g.tableId === table.id && !App.results.some((r) => r.graphId === g.id));
+    let graph = App.graphs.find((g) => g.tableId === table.id && !resultForGraph(g));
     if (graph) mergeLinkedGraphSpec(graph, makeQuickGraphSpec(table));
     else {
       graph = { id: 'gr_' + App.counter++, name: table.name, tableId: table.id, spec: makeQuickGraphSpec(table) };
@@ -2175,9 +2314,8 @@
           const computed = compute(table, r.spec);
           html = computed.html;
           if (computed.error) invalidateLinkedGraph(r, computed.error);
-          else {
-            const graph = linkedGraphFor(r);
-            if (graph && graph.spec.unavailable && computed.graphSpec) mergeLinkedGraphSpec(graph, computed.graphSpec);
+          else if (computed.graphSpec) {
+            linkedGraphsFor(r).forEach((graph) => { if (graph.spec.unavailable) mergeLinkedGraphSpec(graph, computed.graphSpec); });
           }
         } else {
           html = el('div', { class: 'note' }, '(source table missing)');
@@ -2371,9 +2509,25 @@
   function deleteGraph(id) {
     const g = App.graphs.find((x) => x.id === id); if (!g) return;
     App.graphs = App.graphs.filter((x) => x.id !== id);
-    // a result may link to this graph via graphId — drop the now-dangling link
-    App.results.forEach((r) => { if (r.graphId === id) delete r.graphId; });
+    // A result linking to this graph adopts a remaining duplicate, or drops the dangling link.
+    App.results.forEach((r) => {
+      if (r.graphId !== id) return;
+      const next = linkedGraphsFor(r)[0];
+      if (next) r.graphId = next.id; else delete r.graphId;
+    });
     afterDelete(); toast('Deleted graph');
+  }
+  // An independent copy to tinker with: its own styling, still linked to the same
+  // table (and analysis), so data edits keep both up to date.
+  function duplicateGraph(id) {
+    const g = App.graphs.find((x) => x.id === id); if (!g) return;
+    const result = resultForGraph(g);
+    const copy = { id: freshId('gr_'), name: copyName(g.name, namesOf(App.graphs, g.tableId)), tableId: g.tableId, resultId: result ? result.id : g.resultId, spec: structuredClone(g.spec) };
+    if (copy.resultId === undefined) delete copy.resultId;
+    App.graphs.splice(App.graphs.indexOf(g) + 1, 0, copy); // list it right below the original
+    setActive('graph', copy.id);
+    saveState();
+    toast('Made a separate copy — changes here won’t affect “' + g.name + '”');
   }
 
   // Rename the navigator label without changing ids, data, or figure titles.
@@ -2428,6 +2582,7 @@
     } else if (view === 'result') {
       items.push({ label: '🗑 Delete result', danger: true, onClick: () => deleteResult(item.id) });
     } else {
+      items.splice(2, 0, { label: '⧉ Duplicate graph', onClick: () => duplicateGraph(item.id) });
       items.push({ label: '🗑 Delete graph', danger: true, onClick: () => deleteGraph(item.id) });
     }
     showContextMenu(e.clientX, e.clientY, items);
@@ -2452,6 +2607,9 @@
     $('#btn-guide').addEventListener('click', openGuide);
     $('#btn-graph-all').addEventListener('click', graphAll);
     $('#analyze-go').addEventListener('click', runAnalyzeFromModal);
+    // Option controls update analyzeState in their own handlers first; these run after them.
+    $('#analyze-body').addEventListener('change', updateAnalyzeExisting);
+    $('#analyze-body').addEventListener('input', updateAnalyzeExisting);
     $('#import-go').addEventListener('click', doImport);
     $('#guide-back').addEventListener('click', () => { guideStack.pop(); renderGuide(); });
     $$('#import-type .seg-btn').forEach((b) => b.addEventListener('click', () => { $$('#import-type .seg-btn').forEach((x) => x.classList.remove('active')); b.classList.add('active'); $('#import-reps-row').hidden = b.dataset.type !== 'grouped'; }));
