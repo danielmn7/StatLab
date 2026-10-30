@@ -321,6 +321,8 @@ table.stats tr:last-child td { border-bottom: none; }
 .chart-tip .tip-row { display: flex; justify-content: space-between; gap: 16px; }
 .chart-tip .tip-row span { color: #b9c4d0; }
 .chart-tip .tip-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* marks the data point the tooltip describes (screen only; exports rebuild the SVG) */
+.pt-hover-ring { fill: none; stroke: var(--ink); stroke-width: 1.4; pointer-events: none; }
 
 /* ---------- modal ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
