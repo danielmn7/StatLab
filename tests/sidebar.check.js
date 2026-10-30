@@ -71,6 +71,8 @@ async function action(label) {
   await run(`Array.from(document.querySelectorAll('.view-actions button')).find((b) => b.textContent.includes(${safeLabel})).click()`);
 }
 async function analyze() { await action('Analyze'); await click('#analyze-go'); }
+// Re-running an unchanged analysis reopens it, so a repeat must ask for a separate copy.
+async function analyzeCopy() { await action('Analyze'); await click('#analyze-separate'); await click('#analyze-go'); }
 async function load(project) {
   assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(project))})`), 'Project loads');
 }
@@ -123,7 +125,7 @@ app.whenReady().then(async () => {
   ok('table without children has no disclosure or empty folders', await run(`!document.querySelector(${JSON.stringify(branch(first))}).querySelector('.nav-toggle, .nav-group')`));
   await analyze();
   await click(item('data', first));
-  await analyze();
+  await analyzeCopy();
   await run(`window.StatLab.loadExample('twogroups')`);
   const second = (await state()).tables[1].id;
   await analyze();
@@ -200,7 +202,7 @@ app.whenReady().then(async () => {
   await load({ ...legacy, navigator: { collapsed: ['data:' + first, 'graph:missing-table', null, 'result:' + first] } });
   ok('restore discards stale or invalid disclosure keys', JSON.stringify((await state()).navigator.collapsed) === JSON.stringify(['data:' + first, 'result:' + first]));
   await click(item('data', first));
-  await analyze();
+  await analyzeCopy();
   const newResult = (await state()).results.at(-1);
   ok('new analysis reveals its collapsed source table and Results group', await expanded(first, 'data') && await expanded(first, 'result') && (await state()).active.id === newResult.id && await run(`document.querySelector(${JSON.stringify(item('result', newResult.id))}).checkVisibility()`));
   await click(toggle(first, 'graph'));

@@ -100,6 +100,14 @@ body {
 .nav-table-row.has-active-child > .nav-item { color: var(--accent-dark); }
 .nav-item .ico { font-size: 13px; opacity: .8; width: 16px; flex-shrink: 0; text-align: center; }
 .nav-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* result/graph names whose distinguishing end must stay visible (see leafLabel) */
+.nav-label-2line { display: flex; flex-direction: column; }
+.nav-label-suffixed { display: flex; }
+.nav-label-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the options line wraps (up to two lines) so it is read in full, not cut off */
+.nav-label-variant { min-width: 0; overflow: hidden; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 11px; line-height: 1.3; color: var(--muted); font-weight: 400; }
+.nav-label-sep { display: none; }
+.nav-label-suffix { flex-shrink: 0; white-space: pre; }
 .nav-count { flex-shrink: 0; min-width: 18px; padding: 0 4px; border-radius: 4px; background: #f1f5f9; color: var(--ink-soft); font-size: 10.5px; font-weight: 500; text-align: center; font-variant-numeric: tabular-nums; }
 .nav-toggle, .nav-group-toggle {
   font: inherit; border: none; background: transparent; color: var(--ink-soft); cursor: pointer; border-radius: 5px;
@@ -361,6 +369,13 @@ textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; border: 1px
 .test-opt .t-desc { font-size: 11.5px; color: var(--ink-soft); line-height: 1.4; }
 .test-opt .t-tag { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 999px; background: #eef2f6; color: var(--muted); margin-top: 6px; font-weight: 600; }
 .analyze-opts { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+/* "You already ran this analysis" — a full-width row above the Analyze buttons */
+#modal-analyze .modal-foot { flex-wrap: wrap; }
+.analyze-existing { flex: 1 0 100%; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 9px 12px; border: 1px solid #cfe2ff; border-radius: 8px; background: #f0f7ff; color: #1e40af; font-size: 12.5px; line-height: 1.45; }
+.analyze-existing[hidden] { display: none; }
+.analyze-existing-text { flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; }
+.analyze-existing-copy { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 600; color: var(--ink); cursor: pointer; }
+.analyze-existing-copy input { margin: 0; accent-color: var(--accent); }
 .variance-check { border: 1px solid var(--line-strong); border-radius: 8px; padding: 12px 14px; margin: 12px 0; background: #fbfcfe; min-width: 0; }
 .analyze-opts > .variance-check { margin: 0; }
 .variance-check h4 { margin: 0; font-size: 13.5px; font-weight: 650; }
