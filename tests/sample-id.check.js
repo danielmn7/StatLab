@@ -73,7 +73,8 @@ const pasteOnSheet = (text) => run(`(() => {
 async function analyze(kind) {
   await run(`document.querySelector('#nav-tables .nav-item[data-view="data"]').click();
     Array.from(document.querySelectorAll('.view-actions button')).find((b) => b.textContent.includes('Analyze')).click()`);
-  await run(`Array.from(document.querySelectorAll('.test-opt')).find((c) => c.dataset.kind === ${JSON.stringify(kind)}).click(); document.querySelector('#analyze-go').click()`);
+  await run(`window.__statlabTestKind = ${JSON.stringify(kind)}`);
+  await run(`Array.from(document.querySelectorAll('.test-opt')).find((c) => c.dataset.kind === window.__statlabTestKind).click(); document.querySelector('#analyze-go').click()`);
 }
 const openView = (view) => run(`document.querySelector('#nav-tables .nav-item[data-view="${view}"]').click()`);
 // Move the real mouse onto the plotted point whose read-out shows `value`, then
