@@ -33,7 +33,7 @@
     return p.toFixed(4);
   }
   function reportP(p) { const text = fmtP(p); return 'p ' + (/^[<>]/.test(text) ? text : '= ' + text); }
-  function stars(p) { return p < 0.0001 ? '****' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : 'ns'; }
+  function stars(p) { return !Number.isFinite(p) ? '—' : p < 0.0001 ? '****' : p < 0.001 ? '***' : p < 0.01 ? '**' : p < 0.05 ? '*' : 'ns'; }
   function toast(msg) {
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
     clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 2400);
@@ -962,7 +962,13 @@
     return id;
   }
 
+  // An undefined P value (no variation, too few values) supports no conclusion either way.
+  function unavailableVerdict(text) {
+    return el('div', { class: 'verdict warn', role: 'status' }, el('span', { class: 'vicon' }, '⚠'),
+      el('span', {}, text || 'Unavailable — the P value is undefined for these data (for example, no variation or too few values), so no conclusion can be drawn.'));
+  }
   function verdict(p, sigText, nsText) {
+    if (!Number.isFinite(p)) return unavailableVerdict();
     const sig = p < 0.05;
     return el('div', { class: 'verdict ' + (sig ? 'sig' : 'ns') },
       el('span', { class: 'vicon' }, sig ? '✓' : '○'),
@@ -1168,7 +1174,7 @@
         statsTable([[alternative === 'two-sided' ? 'Mann-Whitney U' : 'Mann-Whitney U (first group)', num(alternative === 'two-sided' ? r.U : r.U1, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], [pLabel, fmtP(r.p)]]),
         apaLine(`U = ${num(alternative === 'two-sided' ? r.U : r.U1, 1)}, ${reportP(r.p)}.`),
         el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value (small sample, no ties).' : 'Normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
-      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }] }));
+      return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: Number.isFinite(r.p) }] }));
     }
 
     if (kind === 'wilcoxon') {
@@ -1231,7 +1237,7 @@
       const coef = kind === 'pearson' ? r.r : r.rho;
       const node = card((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation',
         hypothesisVerdict(table, spec, alternative, r.p, `Significant ${kind === 'pearson' ? 'linear' : 'monotonic'} correlation (${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}).`, 'No significant correlation.'),
-        statsTable([[kind === 'pearson' ? 'r' : 'ρ (rho)', num(coef, 4)], ...(kind === 'pearson' ? [['95% CI for r', `${num(r.ci95lo, 3)} – ${num(r.ci95hi, 3)}`], ['R²', num(r.r2, 4)]] : []), ['n', r.n], [pLabel, fmtP(r.p)]]),
+        statsTable([[kind === 'pearson' ? 'r' : 'ρ (rho)', num(coef, 4)], ...(kind === 'pearson' ? [['95% CI for r', `${num(r.ci95lo, 3)} – ${num(r.ci95hi, 3)}`], ['R²', num(r.r2, 4)]] : []), ['n', r.n], ...(kind === 'spearman' ? [['Method', r.method]] : []), [pLabel, fmtP(r.p)]]),
         apaLine(`${kind === 'pearson' ? 'r' : 'rₛ'}(${r.n - 2}) = ${num(coef, 2)}, ${reportP(r.p)}.`));
       const reg = T.linearRegression(xr, yr);
       return wrap((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation', node, xySpec(table, reg, `${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}, ${pText(r.p)} (${tailName(alternative)})`));
@@ -1256,14 +1262,18 @@
       const blocks = gs.map((g) => {
         const sw = N.shapiroWilk(g.values), da = N.dagostinoPearson(g.values), ad = N.andersonDarling(g.values);
         const rows = [];
-        rows.push(['Shapiro-Wilk', sw.error ? sw.error : `W = ${num(sw.W, 4)}, p = ${fmtP(sw.p)} ${sw.p < 0.05 ? '✗' : '✓'}`]);
-        rows.push(["D'Agostino-Pearson", da.error ? da.error : `K² = ${num(da.K2, 3)}, p = ${fmtP(da.p)} ${da.p < 0.05 ? '✗' : '✓'}`]);
-        rows.push(['Anderson-Darling', ad.error ? ad.error : `A* = ${num(ad.Astar, 4)}, p = ${fmtP(ad.p)} ${ad.p < 0.05 ? '✗' : '✓'}`]);
-        const anyNon = [sw, da, ad].some((t) => !t.error && t.p < 0.05);
+        const mark = (t) => (!Number.isFinite(t.p) ? '(unavailable)' : t.p < 0.05 ? '✗' : '✓');
+        rows.push(['Shapiro-Wilk', sw.error ? sw.error : `W = ${num(sw.W, 4)}, p = ${fmtP(sw.p)} ${mark(sw)}`]);
+        rows.push(["D'Agostino-Pearson", da.error ? da.error : `K² = ${num(da.K2, 3)}, p = ${fmtP(da.p)} ${mark(da)}`]);
+        rows.push(['Anderson-Darling', ad.error ? ad.error : `A* = ${num(ad.Astar, 4)}, p = ${fmtP(ad.p)} ${mark(ad)}`]);
+        const assessed = [sw, da, ad].filter((t) => !t.error && Number.isFinite(t.p));
+        const anyNon = assessed.some((t) => t.p < 0.05);
         return el('div', { style: 'margin-bottom:14px' },
           el('div', { class: 'section-label' }, g.name + `  (n=${g.values.length})`),
           statsTable(rows),
-          el('div', { class: 'assump ' + (anyNon ? 'fail' : 'pass') }, anyNon ? '✗ At least one test rejects normality — consider a non-parametric test.' : '✓ Consistent with a normal distribution — parametric tests are reasonable.'));
+          assessed.length
+            ? el('div', { class: 'assump ' + (anyNon ? 'fail' : 'pass') }, anyNon ? '✗ At least one test rejects normality — consider a non-parametric test.' : '✓ Consistent with a normal distribution — parametric tests are reasonable.')
+            : el('div', { class: 'assump warn' }, '⚠ Normality could not be assessed — the tests are undefined for these data (for example, all values identical).'));
       });
       const node = card('Normality tests', ...blocks, groupedUnitNote(table), el('div', { class: 'note' }, '✓ = consistent with normal (p ≥ 0.05); ✗ = deviates from normal (p < 0.05). With large n, tiny deviations become significant — also inspect the plot.'));
       // Diagnostic test — no auto-graph (issue #34): don't clutter the graphs workspace
@@ -1278,7 +1288,9 @@
         if (spec.iterative) {
           const r = N.grubbsIterative(g.values);
           return el('div', { style: 'margin-bottom:14px' }, head,
-            r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`)) : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
+            r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`))
+              : !Number.isFinite(N.grubbs(g.values).p) ? unavailableVerdict()
+                : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
             r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', { class: 'num' }, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
             el('div', { class: 'note' }, `${r.cleanedN} of ${g.values.length} values remain after removing outliers.`));
         }
@@ -1332,7 +1344,8 @@
       const sigEffects = m.effects.filter((e) => e.p < 0.05);
       const vnode = sigEffects.length
         ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', { html: 'Significant: ' + sigEffects.map((e) => e.name + ' (' + (e.p < 0.0001 ? 'p < 0.0001' : 'p = ' + fmtP(e.p)) + ')').join('; ') }))
-        : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No effect reached significance.'));
+        : m.effects.some((e) => !Number.isFinite(e.p)) ? unavailableVerdict('Unavailable — a P value is undefined for these data (for example, no residual variation), so no conclusion can be drawn.')
+          : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No effect reached significance.'));
       const cmeans = el('table', { class: 'stats' });
       cmeans.append(el('thead', {}, el('tr', {}, el('th', {}, spec.rowFactor + ' \\ ' + spec.colFactor), ...cm.colNames.map((c) => el('th', {}, c)))));
       const cb = el('tbody');
@@ -1371,7 +1384,8 @@
       const sigEffects = m.effects.filter((e) => e.p < 0.05);
       const vnode = sigEffects.length
         ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', { html: 'Significant: ' + sigEffects.map((e) => e.name + ' (' + (e.p < 0.0001 ? 'p < 0.0001' : 'p = ' + fmtP(e.p)) + ')').join('; ') }))
-        : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No effect reached significance.'));
+        : m.effects.some((e) => !Number.isFinite(e.p)) ? unavailableVerdict('Unavailable — a P value is undefined for these data (for example, no residual variation), so no conclusion can be drawn.')
+          : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No effect reached significance.'));
       // cell medians (nonparametric summary)
       const med = (arr) => { const s = arr.slice().sort((x, y) => x - y); return T.quantile(s, 0.5); };
       const cmed = el('table', { class: 'stats' });
@@ -1390,7 +1404,8 @@
   function assumptionNote(...arrs) {
     const checks = arrs.map((a, i) => { if (a.length < 3) return null; const sw = N.shapiroWilk(a); return sw.error ? null : { i, p: sw.p }; }).filter(Boolean);
     if (!checks.length) return null;
-    const bad = checks.filter((c) => c.p < 0.05);
+    const bad = checks.filter((c) => c.p < 0.05), unassessed = checks.filter((c) => !Number.isFinite(c.p)).length;
+    if (!bad.length && unassessed) return el('div', { class: 'assump warn' }, `⚠ Normality check unavailable for ${unassessed} group(s): Shapiro-Wilk is undefined for these data (for example, all values identical).`);
     return el('div', { class: 'assump ' + (bad.length ? 'fail' : 'pass') },
       bad.length ? `⚠ Normality check: ${bad.length} group(s) deviate from normal (Shapiro-Wilk p < 0.05). Consider a non-parametric test (Mann-Whitney/Wilcoxon).` : '✓ Normality check passed (Shapiro-Wilk p ≥ 0.05 for all groups).');
   }
@@ -1408,7 +1423,7 @@
       else if (isDunn) { cells.push(el('td', { class: 'num' }, num(c.z, 3)), el('td', { class: 'num' }, fmtP(c.p))); }
       else if (method === 'dunnett') { cells.push(el('td', { class: 'num' }, num(c.diff)), el('td', { class: 'num' }, num(c.t, 3)), el('td', { class: 'num' }, fmtP(c.p))); }
       else { cells.push(el('td', { class: 'num' }, num(c.diff)), el('td', { class: 'num' }, fmtP(c.p))); }
-      cells.push(el('td', { class: 'num sig-star' }, c.sig ? stars(c.p) : 'ns'));
+      cells.push(el('td', { class: 'num sig-star' }, stars(c.p)));
       tb.append(el('tr', {}, ...cells));
     });
     t.append(tb); return t;
@@ -1438,7 +1453,7 @@
       cells.push(el('td', {}, c.a + ' vs ' + c.b), el('td', { class: 'num' }, num(c.diff)));
       cells.push(el('td', { class: 'num' }, ph.method === 'tukey' ? num(c.q, 3) : num(c.t, 3)));
       cells.push(el('td', { class: 'num' }, fmtP(c.p)));
-      cells.push(el('td', { class: 'num sig-star' }, c.sig ? stars(c.p) : 'ns'));
+      cells.push(el('td', { class: 'num sig-star' }, stars(c.p)));
       tb.append(el('tr', {}, ...cells));
     });
     t.append(tb); return t;
@@ -1476,6 +1491,7 @@
     if (res.length < 8) return null;
     const sw = N.shapiroWilk(res);
     if (sw.error) return null;
+    if (!Number.isFinite(sw.p)) return el('div', { class: 'assump warn' }, '⚠ Residual normality could not be assessed (Shapiro-Wilk is undefined, for example when every cell is constant).');
     return el('div', { class: 'assump ' + (sw.p < 0.05 ? 'fail' : 'pass') },
       sw.p < 0.05 ? '⚠ Residuals deviate from normal (Shapiro-Wilk p < 0.05). Two-way ANOVA is fairly robust, but interpret with care.' : '✓ Residuals are consistent with normality (Shapiro-Wilk p ≥ 0.05).');
   }

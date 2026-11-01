@@ -262,6 +262,7 @@ table.stats tr:last-child td { border-bottom: none; }
 .assump { font-size: 12.5px; padding: 8px 12px; border-radius: 7px; margin: 6px 0; }
 .assump.pass { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
 .assump.fail { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.assump.warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
 
 /* ---------- charts ---------- */
 .graph-wrap { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; display: flex; gap: 20px; }

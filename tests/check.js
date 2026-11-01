@@ -1,5 +1,6 @@
 const T = require('../js/stats-tests.js');
 const C = require('../js/stats-core.js');
+const N = require('../js/stats-normality.js');
 const { isDeepStrictEqual } = require('util');
 const oracle = JSON.parse(require('child_process').execSync('python tests/oracle.py').toString());
 
@@ -154,7 +155,6 @@ const analyticCases = [
   { name: 'Welch', run: (alt, sign) => T.unpairedT([0, 2 * sign], [0, 0], true, alt), t: 1, df: 1, upper: 0.25 },
   { name: 'paired', run: (alt, sign) => T.pairedT([5, 5 + 2 * sign], [5, 5], alt), t: 1, df: 1, upper: 0.25 },
   { name: 'Pearson', run: (alt, sign) => T.pearson([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3 },
-  { name: 'Spearman', run: (alt, sign) => T.spearman([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3 },
   { name: 'regression', run: (alt, sign) => T.linearRegression([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3, pKey: 'pSlope', tKey: 'tSlope' },
 ];
 for (const example of analyticCases) {
@@ -183,7 +183,8 @@ const compatibilityCases = [
   { name: 'MW', run: (alt) => T.mannWhitney(A, B, alt), p: 0.008734437585388832, rank: true },
   { name: 'Wilcoxon', run: (alt) => T.wilcoxonSignedRank(P1, P2, alt), p: 0.013676686898827173, rank: true },
   { name: 'Pearson', run: (alt) => T.pearson(X, Y, alt), p: 4.888933612558003e-10 },
-  { name: 'Spearman', run: (alt) => T.spearman(X, Y, alt), p: 0 },
+  // Exact: perfect agreement is 1 of the 8! equally likely rankings, so two-sided p = 2/8!.
+  { name: 'Spearman', run: (alt) => T.spearman(X, Y, alt), p: 2 / 40320 },
   { name: 'regression', run: (alt) => T.linearRegression(X, Y, alt), p: 4.888933612555067e-10, pKey: 'pSlope' },
 ];
 function invariantFields(result, example) {
@@ -340,7 +341,6 @@ const zeroCases = [
   ['Welch', (alt) => T.unpairedT([-1, 1], [-1, 1], true, alt)],
   ['paired', (alt) => T.pairedT([-1, 1], [0, 0], alt)],
   ['Pearson', (alt) => T.pearson([-1, 0, 1], [1, -2, 1], alt)],
-  ['Spearman', (alt) => T.spearman([1, 2, 3, 4], [2, 4, 1, 3], alt)],
   ['regression', (alt) => T.linearRegression([-1, 0, 1], [1, -2, 1], alt), 'pSlope'],
 ];
 for (const [name, run, pKey = 'p'] of zeroCases) {
@@ -377,7 +377,6 @@ const boundaryCases = [
   ['pooled', (alt, sign) => T.unpairedT([sign, sign], [0, 0], false, alt)],
   ['paired', (alt, sign) => T.pairedT([sign, sign], [0, 0], alt)],
   ['Pearson', (alt, sign) => T.pearson([-1, 0, 1], [-sign, 0, sign], alt)],
-  ['Spearman', (alt, sign) => T.spearman([-1, 0, 1], [-sign, 0, sign], alt)],
   ['regression', (alt, sign) => T.linearRegression([-1, 0, 1], [-sign, 0, sign], alt), 'pSlope'],
 ];
 for (const [name, run, pKey = 'p'] of boundaryCases) {
@@ -398,6 +397,113 @@ for (const { name, run } of compatibilityCases.concat([{ name: 'Student-t helper
   });
   chkSame(`${name} rejects invalid alternatives`, rejected, true);
 }
+
+// --- Spearman: exact permutation distribution (n <= 15), AS 89 Edgeworth (n <= 1290) ---
+// Independent brute force: enumerate every y ranking (Heap's algorithm) and tally
+// S = Σ(i − π(i))², not the engine's subset DP over T = Σi² − S/2.
+function spearmanBruteForce(n) {
+  const perm = Array.from({ length: n }, (_, i) => i + 1), c = new Array(n).fill(0);
+  const freq = new Map(), example = new Map();
+  const tally = () => {
+    let S = 0;
+    for (let i = 0; i < n; i++) S += (i + 1 - perm[i]) ** 2;
+    freq.set(S, (freq.get(S) || 0) + 1);
+    if (!example.has(S)) example.set(S, perm.slice());
+  };
+  tally();
+  for (let i = 0; i < n;) {
+    if (c[i] < i) { const j = i % 2 ? c[i] : 0; [perm[j], perm[i]] = [perm[i], perm[j]]; tally(); c[i]++; i = 0; } else { c[i] = 0; i++; }
+  }
+  return { freq, example };
+}
+for (let n = 3; n <= 9; n++) {
+  const { freq, example } = spearmanBruteForce(n);
+  const { lo, upper } = T.spearmanUpperCounts(n);
+  const sumSq = n * (n + 1) * (2 * n + 1) / 6, dp = new Map();
+  for (let i = 0; i + 1 < upper.length; i++) if (upper[i] > upper[i + 1]) dp.set(2 * (sumSq - lo - i), upper[i] - upper[i + 1]);
+  chkSame(`Spearman n=${n} exact counts == brute force`, [...dp].sort((a, b) => a[0] - b[0]), [...freq].sort((a, b) => a[0] - b[0]));
+  if (n > 6) continue;
+  // Every observable S through the public API, all three hypotheses (includes rho = 0 and rho = ±1).
+  const total = [...freq.values()].reduce((s, v) => s + v, 0), mean = (n ** 3 - n) / 6;
+  for (const [S, y] of example) {
+    const lower = [...freq].filter(([s]) => s <= S).reduce((t, [, k]) => t + k, 0) / total;
+    const higher = [...freq].filter(([s]) => s >= S).reduce((t, [, k]) => t + k, 0) / total;
+    const x = Array.from({ length: n }, (_, i) => i + 1);
+    for (const [alternative, expected] of [['greater', lower], ['less', higher], ['two-sided', Math.min(1, 2 * (S > mean ? higher : lower))]]) {
+      const r = T.spearman(x, y, alternative);
+      chkP(`Spearman exact n=${n} S=${S} ${alternative}`, r.p, expected);
+      chkSame(`Spearman exact n=${n} S=${S} method`, r.method, 'exact');
+    }
+  }
+}
+// n = 10..15 (beyond brute force): n! rankings, symmetry, the known null moments
+// E(S) = (n³ − n)/6 and Var(S) = n²(n − 1)(n + 1)²/36, and the (n − 1) rankings with S = 2.
+for (let n = 10; n <= 15; n++) {
+  const { lo, upper } = T.spearmanUpperCounts(n);
+  const dist = Array.from({ length: upper.length - 1 }, (_, i) => upper[i] - upper[i + 1]);
+  let fact = 1; for (let k = 2; k <= n; k++) fact *= k;
+  chkSame(`Spearman n=${n} counts total n!`, upper[0], fact);
+  chkSame(`Spearman n=${n} counts symmetric`, dist, dist.slice().reverse());
+  const sumSq = n * (n + 1) * (2 * n + 1) / 6;
+  let m1 = 0, m2 = 0;
+  dist.forEach((k, i) => { const S = 2 * (sumSq - lo - i); m1 += k * S; m2 += k * S * S; });
+  m1 /= fact; m2 /= fact;
+  chk(`Spearman n=${n} null mean of S`, m1, (n ** 3 - n) / 6, 1e-12);
+  chk(`Spearman n=${n} null variance of S`, m2 - m1 * m1, n * n * (n - 1) * (n + 1) ** 2 / 36, 1e-9);
+  chkSame(`Spearman n=${n} rankings with S = 2`, dist[dist.length - 2], n - 1);
+}
+// AS 89 Edgeworth series for 16 <= n <= 1290: expected values from an independent Python
+// transcription of Best & Roberts (1975) with R cor.test's tail conventions.
+const spearmanEdgeworthCases = [
+  { y: [3, 1, 7, 2, 5, 10, 4, 12, 6, 9, 15, 8, 11, 16, 13, 14], p: { greater: 7.530862289340749e-05, less: 0.9999345798275693, 'two-sided': 0.00015061724578681497 } },
+  { y: [5, 2, 9, 1, 12, 4, 7, 15, 3, 10, 18, 6, 13, 20, 8, 17, 11, 19, 14, 16], p: { greater: 0.0009410917550429199, less: 0.9990877172722221, 'two-sided': 0.0018821835100858398 } },
+  { y: Array.from({ length: 50 }, (_, i) => ((7 * i) % 50) + 1), p: { greater: 0.3420427330903816, less: 0.6582017178869697, 'two-sided': 0.6840854661807632 } },
+];
+for (const { y, p } of spearmanEdgeworthCases) {
+  const x = y.map((_, i) => i + 1);
+  for (const alternative of alternatives) {
+    const r = T.spearman(x, y, alternative);
+    chkP(`Spearman Edgeworth n=${y.length} ${alternative}`, r.p, p[alternative], 1e-12);
+    chkSame(`Spearman Edgeworth n=${y.length} method`, r.method, 'Edgeworth series approximation (AS 89)');
+  }
+}
+// Hand-off accuracy at n = 16 (S = 300): exact 0.0133172 vs series 0.0133424.
+chkP('Spearman Edgeworth n=16 near exact', T.spearman(Array.from({ length: 16 }, (_, i) => i + 1),
+  [11, 2, 5, 3, 1, 7, 8, 6, 15, 9, 12, 16, 4, 13, 14, 10], 'greater').p, 0.013317224399878274, 2e-3);
+// Ties keep the t approximation on midranks (SciPy spearmanr reference), as R does.
+const spTies = T.spearman([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [2, 1, 4, 4, 6, 5, 8, 7, 10, 9]);
+chkP('Spearman ties t approximation', spTies.p, 2.9285883237761156e-05, 1e-9);
+chkSame('Spearman ties method', spTies.method, 't approximation (ties present)');
+const bigX = Array.from({ length: 1291 }, (_, i) => i + 1), bigY = bigX.map((v) => (v * 7) % 1291 + 1);
+chkSame('Spearman n > 1290 t approximation', [T.spearman(bigX, bigY).method, T.spearman(bigX, bigY).p], ['t approximation', T.pearson(bigX, bigY).p]);
+
+// --- Dunnett: correlations from the group sizes, Corr = λ_i·λ_j, λ_i = √(n_i/(n_i + n_0)) ---
+// Expected values: SciPy adaptive quadrature of the same one-dimensional integral (Dunnett 1955).
+const lam = (ni, n0) => Math.sqrt(ni / (ni + n0));
+for (const [name, d, lams, df, expected] of [
+  ['control 20 vs 3 x 4, t=0.871', 0.8708382973717875, [lam(4, 20), lam(4, 20), lam(4, 20)], 28, 0.7618444819830196],
+  ['control 20 vs 3 x 4, t=2.5', 2.5, [lam(4, 20), lam(4, 20), lam(4, 20)], 28, 0.05316526088612483],
+  ['control 3 vs 2 x 60, t=2.2', 2.2, [lam(60, 3), lam(60, 3)], 120, 0.03874946182262129],
+  ['control 6 vs 4/8/5, t=2.3', 2.3, [lam(4, 6), lam(8, 6), lam(5, 6)], 19, 0.08345971541309016],
+]) chkP(`Dunnett ${name}`, T.dunnettP(d, lams, df), expected, 1e-9);
+for (const l of [0.2, Math.SQRT1_2, 0.97]) chkP(`Dunnett one comparison == t test (λ=${l.toFixed(3)})`, T.dunnettP(2.5, [l], 15), C.studentTtwoTailP(2.5, 15), 1e-10);
+chkSame('Dunnett count form == equal-λ array', T.dunnettP(2.5, 3, 20), T.dunnettP(2.5, [Math.SQRT1_2, Math.SQRT1_2, Math.SQRT1_2], 20));
+const dunnettUnequal = T.posthoc(T.oneWayANOVA([[4.2, 5.1, 3.9, 4.8, 5.5, 4.4], [6.1, 5.8, 7.2, 6.6], [5.0, 5.3, 4.7, 5.9, 6.0, 5.2, 4.9, 5.6], [7.5, 6.9, 8.1, 7.7, 7.0]]
+  .map((values, i) => ({ name: 'G' + i, values }))), 'dunnett', { control: 0 }).comparisons;
+chkP('Dunnett posthoc with unequal n', dunnettUnequal[1].p, 0.0781418621497969, 1e-8);
+
+// --- Anderson-Darling: upper tail via Φ(−z) and the A* >= 10 cap of R's nortest::ad.test ---
+// Expected values: statsmodels normal_ad, and SciPy log_ndtr for the extreme-outlier statistic.
+const adOrdinary = N.andersonDarling([2.1, 3.4, 1.9, 5.6, 4.4, 3.8, 2.7, 4.9, 3.1, 6.2, 2.5, 3.9]);
+chk('AD ordinary A2', adOrdinary.A2, 0.19202590488213822, 1e-12);
+chkP('AD ordinary p', adOrdinary.p, 0.8682710931413162, 1e-12);
+chkP('AD skewed p', N.andersonDarling([0.3, 0.5, 0.6, 0.8, 0.9, 1.1, 1.2, 1.4, 1.6, 1.9, 2.2, 2.6, 3.1, 3.7, 4.4, 5.3, 6.4, 7.8, 9.6, 12.0]).p, 0.0021721286505866832, 1e-12);
+const adBinary = N.andersonDarling(Array.from({ length: 2000 }, (_, i) => i % 2));
+chk('AD 0/1 data A2', adBinary.A2, 359.1174372976775, 1e-12);
+chkSame('AD 0/1 data p capped, not 1', adBinary.p, 3.7e-24);
+const adOutlier = N.andersonDarling(Array.from({ length: 99 }, (_, i) => i / 10).concat([1e6]));
+chk('AD extreme outlier A2 finite', adOutlier.A2, 38.23492803190365, 1e-12);
+chkSame('AD extreme outlier p', adOutlier.p, 3.7e-24);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

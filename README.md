@@ -104,7 +104,8 @@ The grid behaves like a spreadsheet:
 - **t tests** — one-sample, unpaired (Student's, equal variance), unpaired with
   **Welch's correction** (unequal variance), and paired.
 - **ANOVA** — one-way, plus **Welch's ANOVA** for unequal variances, with post-hoc
-  comparisons: **Tukey HSD**, **Dunnett** (vs any control), **Holm-Šídák**,
+  comparisons: **Tukey HSD**, **Dunnett** (vs any control; correlations follow
+  the group sizes, so unequal n is handled correctly), **Holm-Šídák**,
   **Bonferroni**, **Šídák**, or **choose specific comparisons** to run.
 - **Two-way ANOVA** (Grouped tables) — two factors and their **interaction**, with
   **Type III sums of squares** (correct for unbalanced designs), partial η² effect
@@ -114,7 +115,9 @@ The grid behaves like a spreadsheet:
   **Kruskal-Wallis** with **Dunn's** post-hoc, and **Scheirer-Ray-Hare**
   (non-parametric two-way). Every parametric test has a rank-based counterpart.
 - **Correlation & regression** — Pearson, Spearman, and simple linear regression
-  with confidence bands.
+  with confidence bands. Spearman P values are exact for up to 15 untied pairs and
+  use the AS 89 Edgeworth series up to 1,290 (as R's `cor.test` does); with ties
+  they use the t approximation.
 - **One-tailed tests** — in **Analyze → Alternative hypothesis**, choose the
   default **Two-tailed**, or **One-tailed** in either direction. Available for
   all t tests, Mann-Whitney, paired/one-sample Wilcoxon, Pearson/Spearman
@@ -293,6 +296,8 @@ the Electron shell only adds the native window, menu, and file dialogs.
 ## Notes & limits
 - p-values use exact algorithms where practical (e.g. Mann-Whitney for small n) and
   well-established approximations otherwise; each result states the method used.
+- An undefined P value (for example, a group with no variation) is reported as
+  **unavailable**, never as nonsignificant or as passing a check.
 - Two-way ANOVA is included (Grouped tables). Repeated-measures/mixed-effects ANOVA
   and Cox regression are not; the guide flags when a repeated-measures design would be
   more appropriate.

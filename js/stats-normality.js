@@ -122,13 +122,16 @@ const StatNorm = (function (C) {
     let A2 = 0;
     for (let i = 0; i < n; i++) {
       const zi = C.normalCDF((x[i] - m) / s);
-      const zni = C.normalCDF((x[n - 1 - i] - m) / s);
-      A2 += (2 * (i + 1) - 1) * (Math.log(zi) + Math.log(1 - zni));
+      const upper = C.normalCDF(-(x[n - 1 - i] - m) / s); // 1 − Φ(z) without rounding to 0
+      A2 += (2 * (i + 1) - 1) * (Math.log(zi) + Math.log(upper));
     }
     A2 = -n - A2 / n;
     const Astar = A2 * (1 + 0.75 / n + 2.25 / (n * n));
     let p;
-    if (Astar >= 0.6) p = Math.exp(1.2937 - 5.709 * Astar + 0.0186 * Astar * Astar);
+    // D'Agostino & Stephens (1986) approximations. The A* >= 0.6 curve turns upward past
+    // A* ≈ 153, so beyond A* = 10 keep its value there (3.7e-24), as R's nortest::ad.test does.
+    if (Astar >= 10) p = 3.7e-24;
+    else if (Astar >= 0.6) p = Math.exp(1.2937 - 5.709 * Astar + 0.0186 * Astar * Astar);
     else if (Astar >= 0.34) p = Math.exp(0.9177 - 4.279 * Astar - 1.38 * Astar * Astar);
     else if (Astar >= 0.2) p = 1 - Math.exp(-8.318 + 42.796 * Astar - 59.938 * Astar * Astar);
     else p = 1 - Math.exp(-13.436 + 101.14 * Astar - 223.73 * Astar * Astar);

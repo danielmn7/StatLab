@@ -343,11 +343,12 @@ const StatTests = (function (C) {
     } else if (method === 'dunnett') {
       const controlIdx = opts.control != null ? opts.control : 0;
       const treat = []; for (let i = 0; i < k; i++) if (i !== controlIdx) treat.push(i);
+      const lambdas = treat.map((i) => Math.sqrt(ns[i] / (ns[i] + ns[controlIdx])));
       for (const i of treat) {
         const diff = means[i] - means[controlIdx];
         const se = Math.sqrt(msW * (1 / ns[i] + 1 / ns[controlIdx]));
         const t = diff / se;
-        const p = dunnettP(Math.abs(t), treat.length, dfW);
+        const p = dunnettP(Math.abs(t), lambdas, dfW);
         results.push({ a: names[i], b: names[controlIdx], diff, t, p, sig: p < 0.05 });
       }
     } else {
@@ -369,23 +370,19 @@ const StatTests = (function (C) {
     return { method, comparisons: results };
   }
 
-  // Two-sided Dunnett p-value (equicorrelated rho=0.5, exact for balanced designs).
-  function dunnettP(d, mTreat, df) {
-    // P(max|T_i| >= d) = 1 - G(d); integrate over Z (Gauss-Hermite) and chi (Gauss-Legendre on u)
+  // Two-sided Dunnett p-value P(max_i |T_i| >= d) for comparisons with a common control.
+  // Corr(T_i, T_j) = λ_i·λ_j with λ_i = sqrt(n_i / (n_i + n_0)) (Dunnett 1955), so the T_i
+  // are independent given the control's standard normal Z0: X_i = λ_i·Z0 + s_i·Z_i with
+  // s_i = sqrt(1 − λ_i²). Pass the λ array; a count m means equal group sizes (λ² = 1/2).
+  function dunnettP(d, lambdas, df) {
     if (d <= 0) return 1;
-    // Gauss-Hermite nodes (20-pt) for the inner standard-normal integral
-    const gh = ghNodes20;
-    const inner = (uSqrt2d) => {
-      // E_Z[(Phi(uSqrt2d+Z)-Phi(-uSqrt2d+Z))^mTreat]
-      let s = 0;
-      for (let g = 0; g < gh.x.length; g++) {
-        const z = gh.x[g] * Math.SQRT2; // change of variable for weight e^{-x^2}
-        const term = C.normalCDF(uSqrt2d + z) - C.normalCDF(-uSqrt2d + z);
-        s += gh.w[g] * Math.pow(Math.max(term, 0), mTreat);
-      }
-      return s / Math.sqrt(Math.PI);
-    };
-    if (df > 2000) return 1 - inner(d * Math.SQRT2);
+    const groups = [];
+    for (const l of Array.isArray(lambdas) ? lambdas : new Array(lambdas).fill(Math.SQRT1_2)) {
+      const g = groups.find((x) => x.l === l);
+      if (g) g.m++; else groups.push({ l, s: Math.sqrt(1 - l * l), m: 1 });
+    }
+    const inner = (c) => dunnettInner(c, groups);
+    if (df > 2000) return 1 - inner(d);
     // outer integral over u = sqrt(W/df), W~chi2_df, using its density via substitution
     // f_u(u) = 2 * (df/2)^{df/2} / Gamma(df/2) * u^{df-1} e^{-df u^2/2}
     const logc = Math.log(2) + (df / 2) * Math.log(df / 2) - C.gammaln(df / 2);
@@ -396,25 +393,43 @@ const StatTests = (function (C) {
       const u = (n + 0.5) * h; if (u <= 0) continue;
       const logf = logc + (df - 1) * Math.log(u) - df * u * u / 2;
       const fu = Math.exp(logf);
-      integral += fu * inner(d * u * Math.SQRT2) * h;
+      integral += fu * inner(d * u) * h;
       if (n > 5 && fu < 1e-14 && u > 1) break;
     }
     return Math.max(0, Math.min(1, 1 - integral));
   }
 
-  // 20-point Gauss-Hermite nodes/weights (for weight e^{-x^2})
-  const ghNodes20 = {
-    x: [-5.387480890011232, -4.603682449550744, -3.944764040115625, -3.347854567383216,
-      -2.788806058428131, -2.254974002089276, -1.738537712116586, -1.234076215395323,
-      -0.737473728545394, -0.245340708300901, 0.245340708300901, 0.737473728545394,
-      1.234076215395323, 1.738537712116586, 2.254974002089276, 2.788806058428131,
-      3.347854567383216, 3.944764040115625, 4.603682449550744, 5.387480890011232],
-    w: [2.229393645534151e-13, 4.399340992273181e-10, 1.086069370769282e-7, 7.802556478532063e-6,
-      2.283386360163528e-4, 3.243773342237853e-3, 2.481052088746362e-2, 1.090172060200233e-1,
-      2.866755053628341e-1, 4.622436696006102e-1, 4.622436696006102e-1, 2.866755053628341e-1,
-      1.090172060200233e-1, 2.481052088746362e-2, 3.243773342237853e-3, 2.283386360163528e-4,
-      7.802556478532063e-6, 1.086069370769282e-7, 4.399340992273181e-10, 2.229393645534151e-13],
+  // P(max_i |X_i| <= c), integrating the even integrand over Z0 in [0, zhi] with 8-point
+  // Gauss-Legendre panels. Each factor steps from 1 to 0 around z = c/λ over a width ~s/λ,
+  // which is narrow when a treatment group is much larger than the control, so panel edges
+  // bracket every step; beyond zhi some factor is below Φ(−8.5) ≈ 1e-17.
+  const DUNNETT_STEP_OFFSETS = [-8, -6, -4, -3, -2, -1, 0, 1, 2, 3, 4, 6, 8];
+  const GL8 = {
+    x: [0.18343464249564978, 0.525532409916329, 0.7966664774136267, 0.9602898564975362],
+    w: [0.36268378337836166, 0.3137066458778869, 0.22238103445337443, 0.10122853629037706],
   };
+  function dunnettInner(c, groups) {
+    let zhi = 8.5;
+    for (const g of groups) zhi = Math.min(zhi, (c + 8.5 * g.s) / g.l);
+    const edges = [0, zhi];
+    for (let z = 1; z < zhi; z++) edges.push(z);
+    for (const g of groups) {
+      for (const t of DUNNETT_STEP_OFFSETS) { const z = (c + t * g.s) / g.l; if (z > 0 && z < zhi) edges.push(z); }
+    }
+    edges.sort((a, b) => a - b);
+    const f = (z) => {
+      let v = C.normalPDF(z);
+      for (const g of groups) v *= Math.pow(Math.max(C.normalCDF((c - g.l * z) / g.s) - C.normalCDF((-c - g.l * z) / g.s), 0), g.m);
+      return v;
+    };
+    let total = 0;
+    for (let k = 1; k < edges.length; k++) {
+      const mid = (edges[k] + edges[k - 1]) / 2, half = (edges[k] - edges[k - 1]) / 2;
+      if (!(half > 0)) continue;
+      for (let q = 0; q < GL8.x.length; q++) total += half * GL8.w[q] * (f(mid - half * GL8.x[q]) + f(mid + half * GL8.x[q]));
+    }
+    return 2 * total;
+  }
 
   // ---------- Mann-Whitney U ----------
   function rankNormalResult(delta, variance, alternative) {
@@ -592,6 +607,70 @@ const StatTests = (function (C) {
     return { test: 'Pearson correlation', alternative, n: nn, r, r2: r * r, df, t, p, ci95lo: Math.tanh(z - zc * se), ci95hi: Math.tanh(z + zc * se) };
   }
 
+  // Exact null distribution of Spearman's S = Σ(rank_x − rank_y)² for n untied pairs. With x
+  // ranks as positions, the n! equally likely y rankings π give T = Σ i·π(i) = Σi² − S/2.
+  // Counts of permutations by T come from a DP over the set of ranks already placed; they are
+  // exact integers in doubles (15! < 2^53). Cached per n (n = 15 takes ~0.1 s and ~50 MB).
+  const SPEARMAN_EXACT_MAX_N = 15;
+  const spearmanCache = new Map();
+  function spearmanUpperCounts(n) {
+    if (spearmanCache.has(n)) return spearmanCache.get(n);
+    const size = 1 << n, counts = new Array(size), low = new Int32Array(size), ranks = new Int32Array(n);
+    counts[0] = Float64Array.of(1);
+    let layer = [0];
+    for (let k = 1; k <= n; k++) { // position k takes an unused rank v, adding k·v to T
+      const next = [];
+      for (const mask of layer) {
+        const from = counts[mask], base = low[mask];
+        counts[mask] = undefined;
+        for (let v = 1; v <= n; v++) {
+          const to = mask | (1 << (v - 1));
+          if (to === mask) continue;
+          if (!counts[to]) { // T range of these k ranks on positions 1..k (rearrangement inequality)
+            let c = 0;
+            for (let w = 1; w <= n; w++) if (to & (1 << (w - 1))) ranks[c++] = w;
+            let lo = 0, hi = 0;
+            for (let i = 0; i < k; i++) { hi += (i + 1) * ranks[i]; lo += (i + 1) * ranks[k - 1 - i]; }
+            counts[to] = new Float64Array(hi - lo + 1); low[to] = lo; next.push(to);
+          }
+          const dest = counts[to], off = base + k * v - low[to];
+          for (let i = 0; i < from.length; i++) dest[off + i] += from[i];
+        }
+      }
+      layer = next;
+    }
+    const dist = counts[size - 1], upper = new Float64Array(dist.length + 1); // upper[i] = #(T >= lo + i)
+    for (let i = dist.length - 1; i >= 0; i--) upper[i] = upper[i + 1] + dist[i];
+    const out = { lo: low[size - 1], upper };
+    spearmanCache.set(n, out);
+    return out;
+  }
+  // P(S <= s) or P(S >= s). Reversing the y ranks maps T to n(n+1)²/2 − T, so both tails
+  // come from upper counts of T without subtracting from 1.
+  function spearmanExactTail(n, S, lowerTail) {
+    const { lo, upper } = spearmanUpperCounts(n);
+    const t = n * (n + 1) * (2 * n + 1) / 6 - S / 2;
+    const i = Math.ceil(lowerTail ? t : n * (n + 1) * (n + 1) / 2 - t) - lo;
+    return upper[Math.min(Math.max(i, 0), upper.length - 1)] / upper[0];
+  }
+  // Best & Roberts (1975), Algorithm AS 89: Edgeworth series for the same tails, with a ±1
+  // continuity offset for S's even-integer lattice (R's cor.test uses it for 10 <= n <= 1290).
+  const AS89 = [0.2274, 0.2531, 0.1745, 0.0758, 0.1033, 0.3932, 0.0879, 0.0151, 0.0072, 0.0831, 0.0131, 4.6e-4];
+  function spearmanEdgeworthTail(n, S, lowerTail) {
+    if (lowerTail ? S >= (n * n * n - n) / 3 : S <= 0) return 1;
+    const [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12] = AS89;
+    const b = 1 / n;
+    const x = (6 * (S + (lowerTail ? 1 : -1)) / (n * (n * n - 1)) - 1) * Math.sqrt(n - 1);
+    const y = x * x;
+    const u = x * b * (c1 + b * (c2 + c3 * b) + y * (-c4 + b * (c5 + c6 * b)
+      - y * b * (c7 + c8 * b - y * (c9 - c10 * b + y * b * (c11 - c12 * y)))));
+    const corr = u * Math.exp(-y / 2);
+    return Math.max(0, Math.min(1, lowerTail ? C.normalCDF(x) - corr : C.normalCDF(-x) + corr));
+  }
+
+  // P-values: exact permutation distribution (n <= 15), then the AS 89 series (n <= 1290),
+  // else, or with ties, the Student t approximation. R's cor.test follows the same scheme
+  // but leaves exact enumeration above n = 9.
   function spearman(rawX, rawY, alternative = 'two-sided') {
     C.validateAlternative(alternative);
     const xs = [], ys = [];
@@ -600,9 +679,23 @@ const StatTests = (function (C) {
       const x = Number(rawX[i]), y = Number(rawY[i]);
       if (rawX[i] !== '' && rawY[i] !== '' && rawX[i] != null && rawY[i] != null && !Number.isNaN(x) && !Number.isNaN(y)) { xs.push(x); ys.push(y); }
     }
-    const rx = rankData(xs).ranks, ry = rankData(ys).ranks;
-    const pr = pearson(rx, ry, alternative);
-    return { test: 'Spearman correlation', alternative, n: xs.length, rho: pr.r, df: pr.df, t: pr.t, p: pr.p };
+    const rx = rankData(xs), ry = rankData(ys), nn = xs.length;
+    const pr = pearson(rx.ranks, ry.ranks, alternative);
+    let p = pr.p, method;
+    if (nn < 3) method = 'insufficient data';
+    else if (rx.tieCounts.length || ry.tieCounts.length) method = 't approximation (ties present)';
+    else if (nn > 1290) method = 't approximation';
+    else {
+      let S = 0;
+      for (let i = 0; i < nn; i++) S += (rx.ranks[i] - ry.ranks[i]) ** 2;
+      const exact = nn <= SPEARMAN_EXACT_MAX_N;
+      const tail = (lowerTail) => (exact ? spearmanExactTail : spearmanEdgeworthTail)(nn, S, lowerTail);
+      // rho > 0 means small S: P(rho >= r) = P(S <= s)
+      p = alternative === 'greater' ? tail(true) : alternative === 'less' ? tail(false)
+        : Math.min(1, 2 * tail(S <= (nn * nn * nn - nn) / 6));
+      method = exact ? 'exact' : 'Edgeworth series approximation (AS 89)';
+    }
+    return { test: 'Spearman correlation', alternative, n: nn, rho: pr.r, df: pr.df, t: pr.t, p, method };
   }
 
   // ---------- simple linear regression ----------
@@ -836,7 +929,7 @@ const StatTests = (function (C) {
     oneWayANOVA, brownForsythe, posthoc, holmSidak, dunnettP,
     mannWhitney, mannWhitneyCounts, wilcoxonSignedRank,
     kruskalWallis, dunnPosthoc,
-    pearson, spearman, linearRegression,
+    pearson, spearman, spearmanUpperCounts, linearRegression,
     twoWayANOVA, twoWayPosthoc, scheirerRayHare,
   };
 })(typeof StatCore !== 'undefined' ? StatCore : require('./stats-core.js'));

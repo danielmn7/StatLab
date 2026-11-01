@@ -225,6 +225,25 @@ app.whenReady().then(async () => {
     await openAnalysis(name);
     ok(name + ' does not offer inapplicable directional options', await run(`!document.querySelector('#analyze-alternative')`));
   }
+
+  // Undefined P values (no variation) read as unavailable, never as passing or nonsignificant.
+  await fixture('column', ['Same', 'Varied'], low.map((v) => [5, v]));
+  await openAnalysis('Normality tests');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('normality of a constant group is unavailable, not consistent with normal', await run(`(() => {
+    const warn = document.querySelector('.result-card .assump.warn');
+    return !!warn && warn.textContent.includes('could not be assessed') && document.querySelector('.result-card').textContent.includes('(unavailable)')
+      && document.querySelectorAll('.result-card .assump.pass, .result-card .assump.fail').length === 1;
+  })()`));
+  await fixture('column', ['Measurement'], low.map(() => [5]));
+  await openAnalysis('One-sample t test');
+  await choose('#analyze-opts input[type="number"]', '5', 'input');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('one-sample t without variation is unavailable, not nonsignificant', await run(`(() => {
+    const card = document.querySelector('.result-card'), warn = card.querySelector('.verdict.warn');
+    return !!warn && warn.textContent.includes('Unavailable') && !card.querySelector('.verdict.ns, .verdict.sig')
+      && card.querySelector('.assump.warn').textContent.includes('Normality check unavailable');
+  })()`));
   ok('renderer reports no console errors', pageErrors.length === 0);
   console.log(`\n${pass} analysis UI checks passed`);
 }).then(() => finish(0)).catch((err) => {
