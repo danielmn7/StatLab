@@ -1,7 +1,7 @@
 /*
  * stats-normality.js — Normality and outlier tests for StatLab
  * Shapiro-Wilk (Royston 1992/1995), D'Agostino-Pearson omnibus,
- * Anderson-Darling, and Grubbs' (incl. iterative ESD).
+ * Anderson-Darling, Grubbs', and Rosner's generalized ESD.
  * Depends on StatCore.
  */
 const StatNorm = (function (C) {
@@ -164,21 +164,32 @@ const StatNorm = (function (C) {
     return { test: "Grubbs' test (two-sided, alpha=0.05)", ...r, isOutlier: r.p < 0.05 };
   }
 
-  // Iterative Grubbs / ESD: repeatedly remove the most extreme value while significant
-  function grubbsIterative(raw, alpha = 0.05) {
-    let a = raw.slice();
-    const removed = [];
-    while (a.length >= 3) {
-      const r = grubbsOnce(a);
-      if (r.p < alpha) {
-        removed.push({ value: r.value, G: r.G, p: r.p, Gcrit: r.Gcrit, nAtTest: a.length });
-        a.splice(r.idx, 1);
-      } else break;
+  // Generalized ESD for up to r outliers (Rosner 1983; NIST e-Handbook §1.3.5.17.3). Remove the
+  // most extreme value r times, recording R_i = max|x − mean|/s and its critical value λ_i; the
+  // number of outliers is the largest i with R_i > λ_i. Unlike stopping at the first
+  // nonsignificant step (sequential Grubbs), similar outliers cannot mask one another.
+  function generalizedESD(raw, r = 3, alpha = 0.05) {
+    const n = raw.length;
+    if (n < 3) return { test: 'Generalized ESD', error: 'n must be >= 3' };
+    r = Math.max(1, Math.min(Math.floor(r) || 1, n - 2));
+    const a = raw.slice(), steps = [];
+    for (let i = 1; i <= r; i++) {
+      const m = mean(a), s = sd(a);
+      let idx = 0;
+      for (let j = 1; j < a.length; j++) if (Math.abs(a[j] - m) > Math.abs(a[idx] - m)) idx = j;
+      const t = C.studentTinv(1 - alpha / (2 * (n - i + 1)), n - i - 1);
+      const lambda = (n - i) * t / Math.sqrt((n - i - 1 + t * t) * (n - i + 1));
+      steps.push({ i, value: a[idx], R: Math.abs(a[idx] - m) / s, lambda, nAtTest: a.length });
+      a.splice(idx, 1);
     }
-    return { test: "Grubbs' iterative (ESD)", alpha, outliers: removed, cleanedN: a.length, cleaned: a };
+    let k = 0;
+    for (const st of steps) if (st.R > st.lambda) k = st.i;
+    const cleaned = raw.slice();
+    for (const st of steps.slice(0, k)) cleaned.splice(cleaned.indexOf(st.value), 1);
+    return { test: 'Generalized ESD (Rosner)', alpha, r, steps, outliers: steps.slice(0, k), cleanedN: n - k, cleaned };
   }
 
-  return { shapiroWilk, dagostinoPearson, andersonDarling, grubbs, grubbsIterative };
+  return { shapiroWilk, dagostinoPearson, andersonDarling, grubbs, generalizedESD };
 })(typeof StatCore !== 'undefined' ? StatCore : require('./stats-core.js'));
 
 if (typeof module !== 'undefined' && module.exports) module.exports = StatNorm;

@@ -1,6 +1,7 @@
 const T = require('../js/stats-tests.js');
 const C = require('../js/stats-core.js');
 const N = require('../js/stats-normality.js');
+const S = require('../js/survival.js');
 const { isDeepStrictEqual } = require('util');
 const oracle = JSON.parse(require('child_process').execSync('python tests/oracle.py').toString());
 
@@ -504,6 +505,65 @@ chkSame('AD 0/1 data p capped, not 1', adBinary.p, 3.7e-24);
 const adOutlier = N.andersonDarling(Array.from({ length: 99 }, (_, i) => i / 10).concat([1e6]));
 chk('AD extreme outlier A2 finite', adOutlier.A2, 38.23492803190365, 1e-12);
 chkSame('AD extreme outlier p', adOutlier.p, 3.7e-24);
+
+// --- Two-way post hoc: every method's family is all comparisons listed ---
+// Largest of several studentized ranges (ptukey with rr > 1): direct numerical integration
+// of P(max_r R_r <= q s) over the chi distribution of s, with SciPy.
+for (const [q, rr, k, df, expected] of [[3.5, 3, 2, 12, 0.9186680684479486], [3.8, 3, 3, 20, 0.8999810619882446], [4.5, 3, 5, 10, 0.8577984248744919]]) {
+  chk(`ptukey ${rr} ranges of ${k} means`, C.ptukey(q, rr, k, df), expected, 1e-10);
+}
+const twFamily = T.twoWayANOVA([[[5.1, 4.8, 5.6], [6.2, 6.8, 5.9]], [[4.9, 5.4, 5.0], [5.9, 5.4, 6.1]], [[6.1, 5.7, 6.4], [6.6, 7.0, 6.9]]], ['R0', 'R1', 'R2'], ['C0', 'C1']);
+const tukeyWithin = T.twoWayPosthoc(twFamily, 'tukey', 'colsWithinRow'), sidakWithin = T.twoWayPosthoc(twFamily, 'sidak', 'colsWithinRow');
+chkSame('2way Tukey within rows spans all 3 rows', tukeyWithin.ranges, 3);
+tukeyWithin.comparisons.forEach((c, i) => {
+  chkP(`2way Tukey within rows #${i} uses 3 ranges`, c.p, C.tukeyP(c.q, 2, twFamily.residual.df, 3));
+  // Two means per row: the exact joint p (studentized maximum modulus) lies between raw and Šidák.
+  chkSame(`2way Tukey within rows #${i} between raw and Šidák`, c.pRaw <= c.p && c.p <= sidakWithin.comparisons[i].p, true);
+});
+chkSame('2way Tukey every-cell family is one set of means', T.twoWayPosthoc(twFamily, 'tukey', 'cells').ranges, 1);
+
+// --- Two-way ANOVA names empty cells (they, not missing replication, force an additive model) ---
+const twEmpty = T.twoWayANOVA([[[1, 2, 3], [4, 5, 6]], [[2, 3, 4], []]], ['R0', 'R1'], ['C0', 'C1']);
+chkSame('2way empty cell reported', [twEmpty.interaction, twEmpty.emptyCells], [false, [[1, 1]]]);
+chkSame('2way one value per cell has no empty cells', T.twoWayANOVA([[[1], [4]], [[2], [6]], [[3], [7]]], ['a', 'b', 'c'], ['x', 'y']).emptyCells, []);
+chkSame('SRH passes empty cells through', T.scheirerRayHare([[[1, 2, 3], [4, 5, 6]], [[2, 3, 4], []]], ['R0', 'R1'], ['C0', 'C1']).emptyCells, [[1, 1]]);
+
+// --- Log-rank hazard ratio: O/E method with 95% CI; every event time counts in O and E ---
+// Freireich 6-MP data; expected values from an independent NumPy tally of O and E.
+const freireich = [[6, 1], [6, 1], [6, 1], [6, 0], [7, 1], [9, 0], [10, 1], [10, 0], [11, 0], [13, 1], [16, 1], [17, 0], [19, 0], [20, 0], [22, 1], [23, 1], [25, 0], [32, 0], [32, 0], [34, 0], [35, 0]]
+  .map(([time, event]) => ({ time, event, group: '6-MP' }))
+  .concat([1, 1, 2, 2, 3, 4, 4, 5, 5, 8, 8, 8, 8, 11, 11, 12, 12, 15, 17, 22, 23].map((time) => ({ time, event: 1, group: 'Placebo' })));
+const lr = S.logRank(freireich), lrReversed = S.logRank(freireich.slice().reverse());
+chk('log-rank chi2 Freireich', lr.chi2, 16.792940989216547, 1e-12);
+chk('hazard ratio 6-MP / Placebo', lr.hazardRatio, 0.23931471589058542, 1e-12);
+chk('hazard ratio 95% CI low', lr.hazardRatioCI[0], 0.11346717692809555, 1e-12);
+chk('hazard ratio 95% CI high', lr.hazardRatioCI[1], 0.5047409726081821, 1e-12);
+chkSame('reordered rows reverse the hazard ratio and name the groups', lrReversed.groups, ['Placebo', '6-MP']);
+chk('reversed hazard ratio is the reciprocal', lrReversed.hazardRatio, 1 / lr.hazardRatio, 1e-12);
+// The last death has one subject at risk: it still counts (O_A = 3, E_A = 83/30, E_B = 37/30).
+const lastAtRisk = S.logRank([[1, 1, 'A'], [3, 1, 'A'], [5, 1, 'A'], [2, 1, 'B'], [4, 0, 'B']].map(([time, event, group]) => ({ time, event, group })));
+chk('O counts an event with one subject at risk', lastAtRisk.perGroup[0].O, 3, 1e-12);
+chk('E counts an event with one subject at risk', lastAtRisk.perGroup[0].E, 83 / 30, 1e-12);
+chk('hazard ratio with one subject at risk', lastAtRisk.hazardRatio, (3 / (83 / 30)) / (1 / (37 / 30)), 1e-12);
+
+// --- Generalized ESD (Rosner 1983): independent NIST-formula values and scikit-posthocs counts ---
+const esd = N.generalizedESD([2.1, 2.3, 2.2, 2.4, 2.0, 2.3, 2.2, 2.1, 9.0, 9.1], 3);
+[[9.1, 1.913086372703007, 2.2899540844796036], [9.0, 2.6627824361907177, 2.215004223325534], [2.0, 1.527525231651949, 2.1266450871954667]].forEach(([value, R, lambda], i) => {
+  chkSame(`ESD step ${i + 1} value`, esd.steps[i].value, value);
+  chk(`ESD step ${i + 1} R`, esd.steps[i].R, R, 1e-12);
+  chk(`ESD step ${i + 1} lambda`, esd.steps[i].lambda, lambda, 1e-10);
+});
+chkSame('ESD finds both masked outliers', [esd.outliers.map((o) => o.value), esd.cleanedN], [[9.1, 9.0], 8]);
+chkSame('ESD Tietjen-Moore data: one outlier', N.generalizedESD([199.31, 199.53, 200.19, 200.82, 201.92, 201.95, 202.18, 245.57], 3).outliers.map((o) => o.value), [245.57]);
+chkSame('ESD outlier-free data', N.generalizedESD([5.2, 4.8, 6.1, 5.5, 4.9, 5.8, 5.0, 5.3, 5.6, 5.1, 4.7, 5.4], 3).outliers.length, 0);
+chk('ESD first critical value is the Grubbs critical value', esd.steps[0].lambda, N.grubbs([2.1, 2.3, 2.2, 2.4, 2.0, 2.3, 2.2, 2.1, 9.0, 9.1]).Gcrit, 1e-12);
+chkSame('ESD maximum is limited to n - 2', N.generalizedESD([1, 2, 3, 10], 9).steps.length, 2);
+
+// --- Descriptive skewness G1 and excess kurtosis G2 (SciPy skew/kurtosis with bias=False) ---
+const shape = T.describe([1.2, 1.5, 1.7, 2.0, 2.2, 2.8, 3.5, 4.9, 7.3, 12.6]);
+chk('skewness G1', shape.skewness, 1.9035699824995744, 1e-12);
+chk('excess kurtosis G2', shape.kurtosis, 3.583084487883779, 1e-12);
+chkSame('G2 needs n >= 4', [Number.isFinite(T.describe([1, 2, 4]).skewness), Number.isNaN(T.describe([1, 2, 4]).kurtosis)], [true, true]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

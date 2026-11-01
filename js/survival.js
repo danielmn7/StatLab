@@ -78,14 +78,14 @@ const Survival = (function (C) {
       const dj = groups.map((name) => eventsAt(byGroup[name], t));
       const nTot = nj.reduce((s, v) => s + v, 0);
       const dTot = dj.reduce((s, v) => s + v, 0);
-      if (nTot <= 1) continue;
       const w = useGehan ? nTot : 1; // Gehan-Breslow weights by n at risk
       for (let j = 0; j < g; j++) {
         const eij = dTot * nj[j] / nTot;
         O[j] += w * dj[j];
         E[j] += w * eij;
       }
-      // covariance (hypergeometric) — multiply by w^2
+      // covariance (hypergeometric) — multiply by w^2; with one subject at risk d(n − d) = 0
+      if (nTot < 2) continue;
       const factor = (dTot * (nTot - dTot)) / (nTot * nTot * (nTot - 1));
       for (let j = 0; j < g; j++) {
         for (let l = 0; l < g; l++) {
@@ -107,16 +107,22 @@ const Survival = (function (C) {
     const df = m;
     const p = C.chiSquareP(chi2, df);
 
-    // observed/expected and hazard ratio (for 2 groups)
+    // observed/expected and, for 2 groups, the log-rank (O/E) hazard ratio of the first group
+    // vs the second: (O1/E1)/(O2/E2), 95% CI from SE(ln HR) = sqrt(1/E1 + 1/E2)
+    // (Machin, Cheung & Parmar 2006, ch. 3)
     const perGroup = groups.map((name, j) => ({ name, O: O[j], E: E[j], OE: E[j] > 0 ? O[j] / E[j] : NaN }));
-    let hazardRatio = null;
-    if (g === 2 && E[0] > 0 && E[1] > 0) {
+    let hazardRatio = null, hazardRatioCI = null;
+    if (!useGehan && g === 2 && E[0] > 0 && E[1] > 0) {
       hazardRatio = (O[0] / E[0]) / (O[1] / E[1]);
+      if (O[0] > 0 && O[1] > 0) {
+        const halfWidth = C.normalInv(0.975) * Math.sqrt(1 / E[0] + 1 / E[1]);
+        hazardRatioCI = [hazardRatio * Math.exp(-halfWidth), hazardRatio * Math.exp(halfWidth)];
+      }
     }
 
     return {
       test: useGehan ? 'Gehan-Breslow-Wilcoxon test' : 'Log-rank (Mantel-Cox) test',
-      groups, chi2, df, p, perGroup, hazardRatio,
+      groups, chi2, df, p, perGroup, hazardRatio, hazardRatioCI,
     };
   }
 

@@ -791,7 +791,14 @@
       ], 'colsWithinRow'));
     }
     if (kind === 'grubbs') {
-      box.append(sel('Mode', 'iterative', [{ v: 'single', t: 'Single most extreme value' }, { v: 'iterative', t: 'Iterative (find several / ESD)' }], 'single'));
+      const mode = sel('Mode', 'iterative', [{ v: 'single', t: 'Single most extreme value (Grubbs)' }, { v: 'iterative', t: 'Several outliers (generalized ESD)' }], 'single');
+      $('select', mode).addEventListener('change', renderAnalyzeOpts);
+      box.append(mode);
+      if (p.iterative === 'iterative') {
+        p.maxOutliers = p.maxOutliers || '3';
+        box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Maximum number of outliers'),
+          el('input', { class: 'inp', type: 'number', min: '1', step: '1', value: p.maxOutliers, oninput: (e) => { p.maxOutliers = e.target.value; } })));
+      }
     }
     if (kind === 'normality') {
       box.append(el('div', { class: 'note' }, 'Runs Shapiro-Wilk, D’Agostino-Pearson and Anderson-Darling on each group.'));
@@ -850,7 +857,10 @@
       if (mode === 'custom') { out.posthoc = p.customCorr || 'sidak'; out.pairs = p.pairs || []; }
       else out.posthoc = mode;
     }
-    if (kind === 'grubbs') out.iterative = p.iterative === 'iterative';
+    if (kind === 'grubbs') {
+      out.iterative = p.iterative === 'iterative';
+      if (out.iterative) out.maxOutliers = Math.max(1, Math.round(parseFloat(p.maxOutliers)) || 3);
+    }
     if (kind === 'twoway') { out.rowFactor = p.rowFactor || 'Rows'; out.colFactor = p.colFactor || 'Columns'; out.phmethod = p.phmethod || 'sidak'; out.phdir = p.phdir || 'colsWithinRow'; }
     if (kind === 'srh') { out.rowFactor = p.rowFactor || 'Rows'; out.colFactor = p.colFactor || 'Columns'; }
     return out;
@@ -915,7 +925,7 @@
     if ((kind === 'onesample-t' || kind === 'wilcoxon') && s.mu0 === undefined) s.mu0 = 0;
     if (kind === 'anova') { s.posthoc = s.posthoc || 'tukey'; s.note = !!s.note; }
     if (kind === 'kruskal') s.posthoc = s.posthoc || 'holm-sidak';
-    if (kind === 'grubbs') s.iterative = !!s.iterative;
+    if (kind === 'grubbs') { s.iterative = !!s.iterative; if (s.iterative) s.maxOutliers = s.maxOutliers || 3; else delete s.maxOutliers; }
     if (Array.isArray(s.pairs)) s.pairs = s.pairs.map((pair) => pair.slice().sort((a, b) => a - b)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     return JSON.stringify(Object.keys(s).sort().map((k) => [k, s[k]]));
   }
@@ -936,7 +946,7 @@
     if (kind === 'kruskal') parts.push((Array.isArray(spec.pairs) ? 'selected pairs, ' : '') + posthocName(spec.posthoc || 'holm-sidak'));
     if (kind === 'twoway' && spec.phmethod) parts.push(posthocName(spec.phmethod), { colsWithinRow: 'columns within rows', rowsWithinCol: 'rows within columns', colMeans: 'column means', rowMeans: 'row means', cells: 'every cell' }[spec.phdir] || spec.phdir);
     if ((kind === 'twoway' || kind === 'srh') && spec.rowFactor) parts.push(spec.rowFactor + ' × ' + spec.colFactor);
-    if (kind === 'grubbs') parts.push(spec.iterative ? 'iterative' : 'single outlier');
+    if (kind === 'grubbs') parts.push(spec.iterative ? 'generalized ESD, up to ' + (spec.maxOutliers || 3) : 'single outlier');
     if (DIRECTIONAL_TESTS.has(kind)) parts.push(tailName(spec.alternative || 'two-sided'));
     return parts.filter(Boolean).join(', ');
   }
@@ -1110,7 +1120,7 @@
       tbl.append(tb);
       const node = card('Descriptive statistics', tbl,
         el('div', { class: 'section-label' }, 'Skewness & kurtosis'),
-        statsTable(rows.map((r) => [r.name, `skew ${num(r.d.skewness, 3)} · kurtosis ${num(r.d.kurtosis, 3)}`])),
+        statsTable(rows.map((r) => [r.name, `skewness (G1) ${num(r.d.skewness, 3)} · excess kurtosis (G2) ${num(r.d.kurtosis, 3)}`])),
         groupedUnitNote(table));
       const gspec = table.type === 'xy' ? null : graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sd' });
       return wrap('Descriptive statistics', node, gspec);
@@ -1286,22 +1296,25 @@
         const head = el('div', { class: 'section-label' }, g.name + `  (n=${g.values.length})`);
         if (g.values.length < 3) return el('div', { style: 'margin-bottom:14px' }, head, el('div', { class: 'note' }, 'Need at least 3 values to test for an outlier.'));
         if (spec.iterative) {
-          const r = N.grubbsIterative(g.values);
+          const r = N.generalizedESD(g.values, spec.maxOutliers || 3), k = r.outliers.length;
           return el('div', { style: 'margin-bottom:14px' }, head,
-            r.outliers.length ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${r.outliers.length} outlier(s).`))
+            k ? el('div', { class: 'verdict sig' }, el('span', { class: 'vicon' }, '✓'), el('span', {}, `Detected ${k} outlier(s).`))
               : !Number.isFinite(N.grubbs(g.values).p) ? unavailableVerdict()
                 : el('div', { class: 'verdict ns' }, el('span', { class: 'vicon' }, '○'), el('span', {}, 'No outliers detected.')),
-            r.outliers.length ? el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Outlier value', 'G', 'G critical', 'P'].map((h) => el('th', { class: 'num' }, h)))), el('tbody', {}, ...r.outliers.map((o) => el('tr', {}, el('td', { class: 'num' }, num(o.value)), el('td', { class: 'num' }, num(o.G, 4)), el('td', { class: 'num' }, num(o.Gcrit, 4)), el('td', { class: 'num' }, fmtP(o.p)))))) : null,
-            el('div', { class: 'note' }, `${r.cleanedN} of ${g.values.length} values remain after removing outliers.`));
+            el('table', { class: 'stats' }, el('thead', {}, el('tr', {}, ...['Step', 'Value removed', 'R', 'λ critical (α=0.05)', ''].map((h) => el('th', { class: 'num' }, h)))),
+              el('tbody', {}, ...r.steps.map((st) => el('tr', {}, el('td', { class: 'num' }, st.i), el('td', { class: 'num' }, num(st.value)),
+                el('td', { class: 'num' }, num(st.R, 4)), el('td', { class: 'num' }, num(st.lambda, 4)), el('td', { class: 'num sig-star' }, st.i <= k ? 'outlier' : ''))))),
+            el('div', { class: 'note' }, `Tested for up to ${r.r} outlier(s): the outliers are the values removed in steps 1 to k, where k is the last step with R > λ. ${r.cleanedN} of ${g.values.length} values remain.`),
+            esdCaution(g.values.length, r.r));
         }
         const r = N.grubbs(g.values);
         return el('div', { style: 'margin-bottom:14px' }, head,
           verdict(r.p, `The value ${num(r.value)} is a significant outlier.`, `No significant outlier (most extreme value = ${num(r.value)}).`),
           statsTable([['Most extreme value', num(r.value)], ['G (test statistic)', num(r.G, 4)], ['G critical (α=0.05)', num(r.Gcrit, 4)], ['Mean / SD', `${num(r.mean)} / ${num(r.sd)}`], ['n', r.n], ['P value (two-sided)', fmtP(r.p)]]));
       });
-      const node = card("Grubbs' outlier test" + (spec.iterative ? ' (iterative ESD)' : ''), ...blocks,
+      const node = card(spec.iterative ? 'Generalized ESD outlier test (Rosner)' : "Grubbs' outlier test", ...blocks,
         groupedUnitNote(table),
-        el('div', { class: 'note' }, 'Grubbs assumes the rest of the data are approximately normal. Investigate outliers before deleting them.'));
+        el('div', { class: 'note' }, (spec.iterative ? 'The test' : 'Grubbs') + ' assumes the rest of the data are approximately normal. Investigate outliers before deleting them.'));
       // Diagnostic test — no auto-graph (issue #34): don't clutter the graphs workspace
       // with an unrequested column scatter. Users can still make one via ◧ Graph.
       return wrap("Grubbs' outlier test", node, null);
@@ -1319,7 +1332,8 @@
       if (res.logRank) {
         parts.push(verdict(res.logRank.p, 'Survival curves differ significantly between groups.', 'No significant difference between survival curves.'));
         parts.push(el('div', { class: 'section-label' }, 'Log-rank (Mantel-Cox) test'));
-        parts.push(statsTable([['Chi-square', num(res.logRank.chi2, 4)], ['df', res.logRank.df], ['P value', fmtP(res.logRank.p)], ...(res.logRank.hazardRatio != null ? [['Hazard ratio', num(res.logRank.hazardRatio, 4)]] : [])]));
+        parts.push(statsTable([['Chi-square', num(res.logRank.chi2, 4)], ['df', res.logRank.df], ['P value', fmtP(res.logRank.p)], ...hazardRatioRows(res.logRank)]));
+        if (res.logRank.hazardRatio != null) parts.push(el('div', { class: 'note' }, 'Hazard ratios use the log-rank O/E method, (O₁/E₁)/(O₂/E₂), with a 95% CI from SE(ln HR) = √(1/E₁ + 1/E₂); they assume proportional hazards.'));
         parts.push(el('div', { class: 'section-label' }, 'Gehan-Breslow-Wilcoxon test (weights early events)'));
         parts.push(statsTable([['Chi-square', num(res.gehan.chi2, 4)], ['P value', fmtP(res.gehan.p)]]));
       }
@@ -1361,10 +1375,11 @@
       };
       const dirText = dirTextMap[spec.phdir] || dirTextMap.colsWithinRow;
       const node = card('Two-way ANOVA', vnode, at,
-        m.interaction ? null : el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Only one value per cell — the interaction cannot be estimated, so this fits an additive model (assumes no interaction).'),
+        additiveModelNote(m, cm),
         el('div', { class: 'section-label' }, 'Cell means (mean ± SD)'), cmeans,
         el('div', { class: 'section-label' }, 'Multiple comparisons: ' + dirText + ' (' + posthocName(spec.phmethod) + ')'),
         twoWayPosthocTable(ph),
+        twoWayFamilyNote(ph, spec),
         residualNormalityNote(cm.cells));
       const sigInfo = phSigForGrouped(ph);
       const gspec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sigInfo.sig, sigNote: sigInfo.note } };
@@ -1392,7 +1407,7 @@
       cmed.append(el('thead', {}, el('tr', {}, el('th', {}, spec.rowFactor + ' \\ ' + spec.colFactor), ...cm.colNames.map((c) => el('th', {}, c)))));
       cmed.append(el('tbody', {}, ...cm.rowNames.map((rn, i) => el('tr', {}, el('td', {}, rn), ...cm.colNames.map((_, j) => el('td', { class: 'num' }, cm.cells[i][j].length ? num(med(cm.cells[i][j])) + ' (n=' + cm.cells[i][j].length + ')' : '—'))))));
       const node = card('Scheirer-Ray-Hare test (nonparametric two-way)', vnode, at,
-        m.interaction ? null : el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Only one value per cell — the interaction cannot be estimated (additive model).'),
+        additiveModelNote(m, cm),
         el('div', { class: 'section-label' }, 'Cell medians'), cmed,
         el('div', { class: 'note' }, 'H statistics are compared to the chi-square distribution. This is the two-way analogue of the Kruskal-Wallis test.'));
       const gspec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem' } };
@@ -1401,6 +1416,19 @@
     throw new Error('Unknown analysis: ' + kind);
   }
 
+  // Generalized ESD keeps its 5% false-positive rate for one suspected outlier at any n, up to
+  // two when n >= 15, and up to ten (and n/2) when n >= 25 (Rosner 1983; EnvStats simulations).
+  function esdCaution(n, k) {
+    if (k <= 1 || (k <= 2 && n >= 15) || (n >= 25 && k <= Math.min(10, Math.floor(n / 2)))) return null;
+    return el('div', { class: 'assump warn' }, `⚠ With n = ${n}, testing for up to ${k} outliers can flag outliers in outlier-free data more often than 5% of the time. The 5% rate holds for 1 suspected outlier at any n, up to 2 when n ≥ 15, and up to 10 when n ≥ 25 (Rosner 1983).`);
+  }
+  // Log-rank hazard ratio in both directions, so the reference group is explicit.
+  function hazardRatioRows(lr) {
+    if (lr.hazardRatio == null) return [];
+    const [a, b] = lr.groups, hr = lr.hazardRatio, ci = lr.hazardRatioCI;
+    const row = (top, bottom, v, lo, hi) => [`Hazard ratio ${top} / ${bottom}` + (ci ? ' (95% CI)' : ''), num(v, 4) + (ci ? `  (${num(lo, 4)} – ${num(hi, 4)})` : '')];
+    return [row(a, b, hr, ci && ci[0], ci && ci[1]), row(b, a, 1 / hr, ci && 1 / ci[1], ci && 1 / ci[0])];
+  }
   function assumptionNote(...arrs) {
     const checks = arrs.map((a, i) => { if (a.length < 3) return null; const sw = N.shapiroWilk(a); return sw.error ? null : { i, p: sw.p }; }).filter(Boolean);
     if (!checks.length) return null;
@@ -1438,6 +1466,22 @@
       .map((c) => ({ i: idx[c.a], j: idx[c.b], name: `${c.a} vs ${c.b}`, label: stars(c.p), p: c.p, sig: !!c.sig }))
       .filter((s) => s.i != null && s.j != null)
       .map((s) => { const on = s.sig && shown < 6; if (on) shown++; return Object.assign(s, { on }); });
+  }
+  // Every two-way post-hoc method's familywise error covers all comparisons listed.
+  function twoWayFamilyNote(ph, spec) {
+    const n = ph.comparisons.length;
+    if (!n) return null;
+    const across = ph.direction === 'colsWithinRow' ? spec.rowFactor : spec.colFactor;
+    return el('div', { class: 'note' }, `Family: all ${n} comparison${n === 1 ? '' : 's'} listed` + (ph.method === 'tukey' && ph.ranges > 1
+      ? ` — Tukey uses the largest studentized range across the ${ph.ranges} levels of ${across} (Copenhaver & Holland 1988).` : '.'));
+  }
+  // The interaction needs every cell filled and some replication; name what forced an additive fit.
+  function additiveModelNote(m, cm) {
+    if (m.interaction) return null;
+    const empty = (m.emptyCells || []).map(([i, j]) => cm.rowNames[i] + ' × ' + cm.colNames[j]);
+    return el('div', { class: 'note', style: 'color:var(--warn)' }, empty.length
+      ? `⚠ No data in ${empty.join(', ')} — the interaction cannot be estimated with an empty cell, so this fits an additive model (assumes no interaction).`
+      : '⚠ Only one value per cell — the interaction cannot be estimated, so this fits an additive model (assumes no interaction).');
   }
   function twoWayPosthocTable(ph) {
     const t = el('table', { class: 'stats' });

@@ -133,9 +133,11 @@ The grid behaves like a spreadsheet:
 - **Variance diagnostic** — **Brown–Forsythe** (median-centered Levene) for two
   or more independent groups in Column tables. Reports each group's n, SD,
   sample variance, W statistic, degrees of freedom, and approximate p-value.
-- **Outliers** — **Grubbs'** test (single and iterative/ESD).
+- **Outliers** — **Grubbs'** test for one outlier, and Rosner's **generalized ESD**
+  for several (up to a chosen maximum; similar outliers cannot mask one another).
 - **Survival** — **Kaplan-Meier** curves, **log-rank (Mantel-Cox)** and
-  **Gehan-Breslow-Wilcoxon** tests, median survival and hazard ratio.
+  **Gehan-Breslow-Wilcoxon** tests, median survival, and the log-rank hazard ratio
+  with its 95% CI (reported in both directions, so the reference group is explicit).
 
 ### Guidance
 - A **"Which test should I use?"** decision tree walks you from your question to the

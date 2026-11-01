@@ -358,10 +358,11 @@ const StatCore = (function () {
     return ans;
   }
 
-  // p-value for Tukey: P(Q >= q)
-  function tukeyP(q, k, df) {
+  // p-value for Tukey: P(Q >= q), Q the largest of `ranges` independent studentized ranges
+  // of k means sharing one error variance (ranges > 1: Copenhaver & Holland 1988)
+  function tukeyP(q, k, df, ranges = 1) {
     if (q <= 0) return 1;
-    return 1 - ptukey(q, 1, k, df);
+    return 1 - ptukey(q, ranges, k, df);
   }
   // Critical value of studentized range
   function tukeyInv(p, k, df) {

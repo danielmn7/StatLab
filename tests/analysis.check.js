@@ -51,6 +51,23 @@ async function choose(selector, value, event = 'change') {
     input.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true }));
   })()`);
 }
+async function groupedFixture(groupNames, nsub, rowTitles, rows) {
+  const table = new D.DataTable('grouped');
+  Object.assign(table, { groupNames, nsub, rowTitles });
+  table.rows = rows.map((row) => row.map((v) => v == null ? '' : String(v)));
+  table.ensureRows(rows.length + 2);
+  const json = JSON.stringify({ tables: [table], results: [], graphs: [], counter: 1, active: { view: 'data', id: table.id } });
+  assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(json)})`));
+}
+// Analyze-dialog option rows are found by their label text.
+async function chooseOption(label, value, event = 'change') {
+  await run(`(() => {
+    const row = Array.from(document.querySelectorAll('#analyze-opts .opt-row')).find((r) => r.querySelector('label')?.textContent.startsWith(${JSON.stringify(label)}));
+    const input = row.querySelector('select, input');
+    input.value = ${JSON.stringify(value)};
+    input.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true }));
+  })()`);
+}
 async function resultDetails() {
   return run(`(() => {
     const card = document.querySelector('.result-card');
@@ -244,6 +261,41 @@ app.whenReady().then(async () => {
     return !!warn && warn.textContent.includes('Unavailable') && !card.querySelector('.verdict.ns, .verdict.sig')
       && card.querySelector('.assump.warn').textContent.includes('Normality check unavailable');
   })()`));
+
+  // Generalized ESD finds two similar outliers that sequential Grubbs would mask.
+  await fixture('column', ['Values'], [2.1, 2.3, 2.2, 2.4, 2.0, 2.3, 2.2, 2.1, 9.0, 9.1].map((v) => [v]));
+  await openAnalysis("Grubbs' outlier test");
+  await chooseOption('Mode', 'iterative');
+  ok('generalized ESD mode asks for a maximum number of outliers', await run(`Array.from(document.querySelectorAll('#analyze-opts .opt-row label')).some((l) => l.textContent === 'Maximum number of outliers')`));
+  await chooseOption('Maximum number of outliers', '3', 'input');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('generalized ESD reports both masked outliers, each step, and a small-sample caution', await run(`(() => {
+    const card = document.querySelector('.result-card');
+    return card.querySelector('h3').textContent.includes('Generalized ESD') && card.querySelector('.verdict.sig').textContent.includes('Detected 2 outlier(s)')
+      && card.querySelectorAll('tbody tr').length === 3 && !!card.querySelector('.assump.warn');
+  })()`));
+
+  // Hazard ratios name both directions, with 95% CIs (Freireich 6-MP data).
+  const mp = [[6, 1], [6, 1], [6, 1], [6, 0], [7, 1], [9, 0], [10, 1], [10, 0], [11, 0], [13, 1], [16, 1], [17, 0], [19, 0], [20, 0], [22, 1], [23, 1], [25, 0], [32, 0], [32, 0], [34, 0], [35, 0]];
+  const placebo = [1, 1, 2, 2, 3, 4, 4, 5, 5, 8, 8, 8, 8, 11, 11, 12, 12, 15, 17, 22, 23];
+  await fixture('survival', ['Time', 'Status', 'Group'], mp.map(([t, e]) => [t, e, '6-MP']).concat(placebo.map((t) => [t, 1, 'Placebo'])));
+  await openAnalysis('Kaplan-Meier');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('hazard ratios are labeled in both directions with 95% CIs', await run(`(() => {
+    const row = (label) => Array.from(document.querySelectorAll('.result-card tr')).find((r) => r.querySelector('th')?.textContent === label)?.querySelector('td').textContent;
+    return row('Hazard ratio 6-MP / Placebo (95% CI)') === '0.2393  (0.1135 – 0.5047)' && row('Hazard ratio Placebo / 6-MP (95% CI)') === '4.1786  (1.9812 – 8.8131)';
+  })()`));
+
+  // Two-way post hoc states its family; an empty cell is named instead of "one value per cell".
+  await groupedFixture(['A', 'B'], 3, ['R0', 'R1', 'R2'], [[5.1, 4.8, 5.6, 6.2, 6.8, 5.9], [4.9, 5.4, 5.0, 5.9, 5.4, 6.1], [6.1, 5.7, 6.4, 6.6, 7.0, 6.9]]);
+  await openAnalysis('Two-way ANOVA');
+  await chooseOption('Multiple comparisons', 'tukey');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('two-way Tukey states that its family spans every row', await run(`Array.from(document.querySelectorAll('.result-card .note')).some((n) => n.textContent.startsWith('Family: all 3 comparisons listed') && n.textContent.includes('largest studentized range across the 3 levels'))`));
+  await groupedFixture(['A', 'B'], 3, ['R0', 'R1'], [[1, 2, 3, 4, 5, 6], [2, 3, 4, '', '', '']]);
+  await openAnalysis('Two-way ANOVA');
+  await run(`document.querySelector('#analyze-go').click()`);
+  ok('two-way ANOVA names the empty cell that forces an additive model', await run(`Array.from(document.querySelectorAll('.result-card .note')).some((n) => n.textContent.includes('No data in R1 × B'))`));
   ok('renderer reports no console errors', pageErrors.length === 0);
   console.log(`\n${pass} analysis UI checks passed`);
 }).then(() => finish(0)).catch((err) => {

@@ -1,8 +1,8 @@
 /*
  * charts.js — SVG figure engine for StatLab.
- * Each builder returns an SVG markup string. Standalone (no stats dependency).
+ * Each builder returns an SVG markup string. Uses StatCore only for t quantiles.
  */
-const Charts = (function () {
+const Charts = (function (C) {
   'use strict';
 
   const PALETTE = ['#0d9488', '#2563eb', '#dc2626', '#d97706', '#7c3aed', '#0891b2', '#65a30d', '#db2777'];
@@ -278,9 +278,8 @@ const Charts = (function () {
   function sd(a) { const m = mean(a); return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / (a.length - 1)); }
   function sem(a) { return sd(a) / Math.sqrt(a.length); }
   function quantile(s, p) { const n = s.length; if (n === 1) return s[0]; const h = (n - 1) * p, lo = Math.floor(h); return s[lo] + (h - lo) * (s[Math.min(lo + 1, n - 1)] - s[lo]); }
-  function tcrit95(df) { // small lookup, good enough for CI whiskers
-    const tbl = { 1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228, 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042, 60: 2.000 };
-    if (tbl[df]) return tbl[df]; if (df > 60) return 1.96; const ks = Object.keys(tbl).map(Number).sort((a, b) => a - b); let k = ks[0]; for (const kk of ks) if (kk <= df) k = kk; return tbl[k]; }
+  // two-sided 95% t multiplier, the same quantile the results tables use for their CIs
+  function tcrit95(df) { return df >= 1 ? C.studentTinv(0.975, df) : NaN; }
 
   function niceNum(range, round) {
     const exp = Math.floor(Math.log10(range || 1));
@@ -1144,7 +1143,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, FIG_WIDTH: FIG_W, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
-})();
+  return { PALETTE, PALETTES, MARKERS, FIG_WIDTH: FIG_W, paletteById, expandPalette, markerSVG, swarmOffsets, tcrit95, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
+})(typeof StatCore !== 'undefined' ? StatCore : require('./stats-core.js'));
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;

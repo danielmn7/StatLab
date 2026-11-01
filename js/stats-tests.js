@@ -40,8 +40,11 @@ const StatTests = (function (C) {
     const s = n > 1 ? sd(a, m) : NaN;
     const se = n > 1 ? s / Math.sqrt(n) : NaN;
     const { m2, m3, m4 } = centralMoments(a, m);
-    const skew = m2 > 0 ? m3 / Math.pow(m2, 1.5) : NaN;          // g1
-    const kurt = m2 > 0 ? m4 / (m2 * m2) - 3 : NaN;              // excess g2
+    // Sample skewness G1 and excess kurtosis G2: the moment ratios g1, g2 adjusted for sample
+    // size, as reported by SAS, SPSS and Excel (and G1 by Prism) (Joanes & Gill 1998)
+    const g1 = m2 > 0 ? m3 / Math.pow(m2, 1.5) : NaN, g2 = m2 > 0 ? m4 / (m2 * m2) - 3 : NaN;
+    const skew = n > 2 ? g1 * Math.sqrt(n * (n - 1)) / (n - 2) : NaN;
+    const kurt = n > 3 ? (n - 1) / ((n - 2) * (n - 3)) * ((n + 1) * g2 + 6) : NaN;
     const tcrit = n > 1 ? C.studentTinv(0.975, n - 1) : NaN;
     return {
       n, mean: m, sd: s, sem: se, variance: n > 1 ? s * s : NaN,
@@ -781,12 +784,13 @@ const StatTests = (function (C) {
     const obs = [];
     const cellMeans = [], cellN = [], cellSD = [];
     let allPresent = true, N = 0;
+    const emptyCells = [];
     for (let i = 0; i < a; i++) {
       cellMeans[i] = []; cellN[i] = []; cellSD[i] = [];
       for (let j = 0; j < b; j++) {
         const v = cells[i][j] || [];
         cellN[i][j] = v.length; N += v.length;
-        if (v.length === 0) allPresent = false;
+        if (v.length === 0) { allPresent = false; emptyCells.push([i, j]); }
         const m = v.length ? mean(v) : NaN;
         cellMeans[i][j] = m; cellSD[i][j] = v.length > 1 ? sd(v, m) : NaN;
         v.forEach((val) => obs.push({ y: val, ai: i, bj: j }));
@@ -826,7 +830,7 @@ const StatTests = (function (C) {
     return {
       test: 'Two-way ANOVA', a, b, rowNames, colNames, factorRow, factorCol,
       N, grand, ssTotal, effects, residual: { ss: rssFull, df: dfError, ms: rssFull / dfError },
-      replicated, interaction: replicated, cellMeans, cellN, cellSD,
+      replicated, interaction: replicated, emptyCells, cellMeans, cellN, cellSD,
     };
   }
 
@@ -890,8 +894,13 @@ const StatTests = (function (C) {
       }
     }
     const m = comps.length;
+    // Every method controls the familywise error over all comparisons listed. For Tukey within
+    // rows (or columns) that family spans several independent sets of means sharing one error
+    // MS, so use the largest studentized range across them (Copenhaver & Holland 1988).
+    const ranges = direction === 'colsWithinRow' ? new Set(comps.map((c) => c.cellA[0])).size
+      : direction === 'rowsWithinCol' ? new Set(comps.map((c) => c.cellA[1])).size : 1;
     comps.forEach((c) => { c.pRaw = C.studentTtwoTailP(c.t, dfE); });
-    if (method === 'tukey') comps.forEach((c) => { c.q = Math.abs(c.diff) / (c.se / Math.SQRT2); c.p = C.tukeyP(c.q, c.groups, dfE); c.sig = c.p < 0.05; });
+    if (method === 'tukey') comps.forEach((c) => { c.q = Math.abs(c.diff) / (c.se / Math.SQRT2); c.p = C.tukeyP(c.q, c.groups, dfE, ranges); c.sig = c.p < 0.05; });
     else {
       let adj;
       if (method === 'bonferroni') adj = comps.map((c) => Math.min(1, c.pRaw * m));
@@ -899,7 +908,7 @@ const StatTests = (function (C) {
       else adj = comps.map((c) => 1 - Math.pow(1 - c.pRaw, m));
       comps.forEach((c, idx) => { c.p = adj[idx]; c.sig = c.p < 0.05; });
     }
-    return { method, direction, comparisons: comps, dfError: dfE };
+    return { method, direction, comparisons: comps, dfError: dfE, ranges };
   }
 
   // Scheirer-Ray-Hare: nonparametric two-way (rank-transform + two-way SS, tested vs chi-square).
@@ -919,7 +928,7 @@ const StatTests = (function (C) {
     const effects = rk.effects.map((e) => { const H = e.ss / msTotal; return { name: e.name, H, df: e.df, p: C.chiSquareP(H, e.df) }; });
     return {
       test: 'Scheirer-Ray-Hare test', a, b, rowNames, colNames, N, msTotal, effects,
-      factorRow: rk.factorRow, factorCol: rk.factorCol, cellMeans: rk.cellMeans, cellN: rk.cellN, cellSD: rk.cellSD, interaction: rk.interaction,
+      factorRow: rk.factorRow, factorCol: rk.factorCol, cellMeans: rk.cellMeans, cellN: rk.cellN, cellSD: rk.cellSD, interaction: rk.interaction, emptyCells: rk.emptyCells,
     };
   }
 

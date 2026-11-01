@@ -120,7 +120,7 @@ const Guidance = (function () {
     rec_regression: rec('Simple linear regression', 'regression', {}, 'Fits Y = slope·X + intercept; gives slope, R², and confidence bands.'),
     rec_normality: rec('Normality tests', 'normality', {}, "Shapiro-Wilk, D'Agostino-Pearson and Anderson-Darling assess whether data could come from a normal distribution."),
     rec_variance: rec('Brown–Forsythe variance test', 'variance', {}, 'Checks for differences in spread across two or more independent groups. This diagnostic does not automatically select or change your mean-comparison test.'),
-    rec_grubbs: rec("Grubbs' outlier test", 'grubbs', {}, 'Detects a single outlier (or, iteratively, several) in roughly normal data.'),
+    rec_grubbs: rec("Grubbs' outlier test", 'grubbs', {}, 'Detects a single outlier (Grubbs) or several (generalized ESD) in roughly normal data.'),
     rec_survival: rec('Kaplan-Meier survival analysis', 'survival', {}, 'Estimates survival curves and compares them with the log-rank test.'),
     rec_twoway: rec('Two-way ANOVA', 'twoway', {}, 'Tests two factors at once (e.g. genotype and time) plus their interaction, using a Grouped data table.'),
   };
@@ -245,7 +245,7 @@ const Guidance = (function () {
       name: "Grubbs' outlier test",
       use: 'Identify whether the most extreme value in a sample is a statistical outlier.',
       assumptions: ['Data are roughly normal apart from the suspected outlier', 'n ≥ 3'],
-      interpret: 'Flags the single most extreme point. Iterative (ESD) mode removes and re-tests to find several outliers. Never delete data without a documented reason.',
+      interpret: 'Flags the single most extreme point. Generalized ESD mode (Rosner 1983) tests for up to a chosen number of outliers, so similar outliers cannot mask one another. Never delete data without a documented reason.',
       alt: 'Outliers are real biology sometimes — investigate before removing.',
     },
     'twoway': {

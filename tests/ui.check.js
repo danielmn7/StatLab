@@ -307,4 +307,9 @@ ok('box-plot outliers show their value; the box itself has none', (() => {
   return tips.length === 3 && tips.every((p, k) => p.t === 'A' && JSON.stringify(p.r) === JSON.stringify([['Outlier', '40']]) && Math.abs(p.x - cx[k]) < 0.01);
 })());
 
+// 95% CI error bars use the exact t quantile of the results tables (no z = 1.96 above df 60).
+const StatCore = require('../js/stats-core.js');
+ok('95% CI error bars use the exact t multiplier', [1, 11, 13, 59, 61, 100, 250].every((df) => Charts.tcrit95(df) === StatCore.studentTinv(0.975, df))
+  && Math.abs(Charts.tcrit95(61) - 1.9996235849949) < 1e-12 && Number.isNaN(Charts.tcrit95(0)));
+
 console.log(`\n${pass} UI/data checks passed`);
