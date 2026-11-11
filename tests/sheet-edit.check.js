@@ -209,6 +209,58 @@ app.whenReady().then(async () => {
     !(await pasteIntoEditor('42\n')) && (await editor()).value === '1' && (await destRows())[3][0] === '');
   await key('Escape', 27);
 
+  // Column names: an open cell draft must not steal the keyboard from the header input.
+  let firstNameCell = 0; // 1-based position of the first header cell holding a name input
+  const header = (i) => `thead tr:first-child th:nth-child(${firstNameCell + i}) input.colname`;
+  const names = async () => { const t = (await state()).tables[0]; return t.type === 'grouped' ? t.groupNames : t.columns.map((c) => c.name); };
+  const headerState = (i) => run(`(() => {
+    const input = document.querySelector(${JSON.stringify(header(i))});
+    return { value: input.value, start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input };
+  })()`);
+  for (const type of ['column', 'grouped']) {
+    await fixture(type, '');
+    firstNameCell = await run(`Array.from(document.querySelectorAll('thead tr:first-child th')).findIndex((th) => th.querySelector('input.colname')) + 1`);
+    const original = (await names())[1];
+    await click(cell(0, 0));
+    await typeText('5');
+    await click(header(1));
+    check(type + ': clicking a column name while a cell draft is open commits the draft and keeps the name focused',
+      await value() === '5' && (await headerState(1)).focused && !(await editor()));
+    await typeText('Treated');
+    const renamed = (await names())[1];
+    check(type + ': typing after that click renames the column, not the cell',
+      renamed !== original && renamed.includes('Treated') && await value() === '5' && !(await editor()));
+    await key('Enter', 13);
+    check(type + ': Enter finishes the rename and returns the keyboard to the grid',
+      (await names())[1] === renamed && await run(`document.activeElement === document.querySelector('.sheet-wrap')`) && await value() === '5');
+
+    await click(header(1), 2);
+    const picked = await headerState(1);
+    check(type + ': double-clicking an already renamed column selects its whole name',
+      picked.focused && picked.start === 0 && picked.end === renamed.length);
+    await typeText('Drug B');
+    await key('Enter', 13);
+    check(type + ': a renamed column can be renamed again by double-click', (await names())[1] === 'Drug B');
+
+    await click(header(1), 2);
+    await typeText('Oops');
+    await key('Escape', 27);
+    check(type + ': Escape restores the previous column name',
+      (await names())[1] === 'Drug B' && (await headerState(1)).value === 'Drug B' && !(await headerState(1)).focused);
+
+    await click(cell(1, 0));
+    await typeText('7');
+    const at = await run(`(() => { const r = document.querySelector(${JSON.stringify(header(0))}).getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    for (const phase of ['mousePressed', 'mouseReleased']) {
+      await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: phase, button: 'right', clickCount: 1, ...at });
+    }
+    await click('#ctx-menu .ctx-item');
+    await typeText('Control');
+    await key('Enter', 13);
+    check(type + ': right-click Rename with a cell draft open renames the column and keeps the draft',
+      (await names())[0] === 'Control' && (await state()).tables[0].rows[1][0] === '7' && await value() === '5');
+  }
+
   await fixture();
   await click(cell(0, 0));
   await typeText('123');
