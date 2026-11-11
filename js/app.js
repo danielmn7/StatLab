@@ -343,6 +343,20 @@
   // Clipboard text spanning several cells: a row/column break other than trailing line ends.
   const isMultiCell = (text) => /[\t\r\n]/.test(String(text || '').replace(/[\r\n]+$/, ''));
 
+  // Column/group name inputs: Enter finishes the rename, Escape restores the name
+  // the input had when it gained focus; both hand the keyboard back to the grid.
+  function headerNameKeys(input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === 'Escape' && input.dataset.orig != null && input.value !== input.dataset.orig) {
+        input.value = input.dataset.orig;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      const wrap = input.closest('.sheet-wrap');
+      if (wrap) wrap.focus(); else input.blur();
+    });
+  }
   function columnHeader(table) {
     const thead = el('thead'); const hr = el('tr');
     hr.append(el('th', { class: 'rowhead' }, '#'));
@@ -357,6 +371,7 @@
         oninput: (e) => { col.name = e.target.value; tableChanged(table); },
         onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== col.name) { propagateColumnRename(table, orig, col.name, ci); saveState(); } },
         ondblclick: (e) => e.target.select() });
+      headerNameKeys(nameInput);
       nameInput.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
         const items = [{ label: '✎ Rename', onClick: () => { nameInput.focus(); nameInput.select(); } }];
@@ -386,6 +401,7 @@
         oninput: (e) => { table.groupNames[gi] = e.target.value; tableChanged(table); },
         onchange: (e) => { const orig = e.target.dataset.orig; if (orig != null && orig !== table.groupNames[gi]) { propagateGroupedRename(table, orig, table.groupNames[gi]); saveState(); } },
         ondblclick: (e) => e.target.select() });
+      headerNameKeys(gInput);
       gInput.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
         const items = [{ label: '✎ Rename', onClick: () => { gInput.focus(); gInput.select(); } }];
@@ -537,7 +553,9 @@
         else if (ev.key === 'ArrowRight') { ev.preventDefault(); this.commitEdit(); this.move(0, 1); }
         else if (ev.key === 'Escape') { ev.preventDefault(); this.cancelEdit(); }
       });
-      inp.addEventListener('blur', () => { if (this.editing) this.commitEdit(); });
+      // Committing on blur must not pull focus back to the grid when the user moved to
+      // another control (a column name, the table title): their typing would land in a cell.
+      inp.addEventListener('blur', (ev) => { if (this.editing) this.commitEdit(!ev.relatedTarget); });
       // A single-line input joins pasted rows/columns into this one cell, so spread
       // multi-cell clipboard text over the grid instead; single values paste natively.
       inp.addEventListener('paste', (ev) => {
@@ -548,12 +566,12 @@
         this.pasteGrid(text);
       });
     }
-    commitEdit() {
+    commitEdit(refocus = true) {
       const { r, c } = this.active; const td = this.cellTd(r, c);
       const inp = td && td.querySelector('input.celledit'); const val = inp ? inp.value : '';
       this.editing = false; this.set(r, c, val);
       if (td) { td.innerHTML = ''; td.append(el('div', { class: 'cellval' }, val)); }
-      tableChanged(this.table); this.highlight(); this.wrap.focus();
+      tableChanged(this.table); this.highlight(); if (refocus) this.wrap.focus();
     }
     cancelEdit() {
       const { r, c } = this.active; const td = this.cellTd(r, c); this.editing = false;
