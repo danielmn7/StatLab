@@ -11,6 +11,14 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'statlab-sheet-edit-'));
 app.setPath('userData', temp);
 app.setPath('sessionData', temp);
 let win, pass = 0;
+const JS_SOURCE_ESCAPE_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+};
+const escapeForJsSource = (str) => str.replace(/[<>/\u2028\u2029]/g, (ch) => JS_SOURCE_ESCAPE_MAP[ch]);
 const run = (code) => win.webContents.executeJavaScript(code, true);
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
 const cell = (r, c) => `td.dcell[data-r="${r}"][data-c="${c}"]`;
@@ -250,7 +258,7 @@ app.whenReady().then(async () => {
 
     await click(cell(1, 0));
     await typeText('7');
-    const at = await run(`(() => { const r = document.querySelector(${JSON.stringify(header(0))}).getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+    const at = await run(`(() => { const r = document.querySelector(${escapeForJsSource(JSON.stringify(header(0)))}).getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
     for (const phase of ['mousePressed', 'mouseReleased']) {
       await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: phase, button: 'right', clickCount: 1, ...at });
     }
