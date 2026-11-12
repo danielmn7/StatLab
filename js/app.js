@@ -38,6 +38,8 @@
     const t = $('#toast'); t.textContent = msg; t.hidden = false;
     clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 2400);
   }
+  // File names keep letters from any script (e.g. Greek: “IFN-γ.png”), unlike \W.
+  function safeFileName(name) { return String(name || 'figure').replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '') || 'figure'; }
   function download(filename, content, mime) {
     const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -460,6 +462,7 @@
       this.wrap = wrap; this.tbl = tbl; this.table = table; this.cols = dataCols; this.nrows = table.rows.length;
       this.c0 = firstCol; // -1 when the sheet has a Sample ID column
       this.sel = null; this.active = null; this.anchor = null; this.dragging = false; this.editing = false;
+      wrap._sheet = this;
       wrap.addEventListener('mousedown', (e) => this.onMouseDown(e));
       wrap.addEventListener('mouseover', (e) => this.onMouseOver(e));
       wrap.addEventListener('dblclick', (e) => { const td = this.tdFrom(e); if (td) { this.active = this.coords(td); this.enterEdit(null); } });
@@ -540,6 +543,9 @@
       this.editing = true;
       const cur = this.get(r, c);
       const inp = el('input', { class: 'celledit', value: initial != null ? initial : (cur == null ? '' : cur) });
+      // Numeric cells keep the symbol shortcuts but skip the Ω button, which would
+      // flicker on every keystroke while numbers are typed.
+      if (!this.isTextCell(c)) inp.dataset.symbols = 'quiet';
       td.innerHTML = ''; td.append(inp); inp.focus();
       if (initial == null) inp.select();
       else inp.setSelectionRange(inp.value.length, inp.value.length);
@@ -565,6 +571,19 @@
         this.editing = false; // the paste replaces the draft, like a paste onto the selected cell
         this.pasteGrid(text);
       });
+    }
+    // Sample IDs and the survival group column hold labels rather than numbers.
+    isTextCell(c) {
+      if (c < 0) return true;
+      const col = this.table.type === 'survival' && this.table.columns[c];
+      return !!col && col.role !== 'time' && col.role !== 'event';
+    }
+    // Ctrl+G on a selected cell: edit it with the caret at the end, then open the palette.
+    editForSymbols() {
+      if (!this.active) { this.active = { r: 0, c: this.c0 }; this.anchor = this.active; }
+      if (!this.editing) { const cur = this.get(this.active.r, this.active.c); this.enterEdit(cur == null ? '' : String(cur)); }
+      const inp = this.tbl.querySelector('input.celledit');
+      if (inp) Symbols.open(inp, { keyboard: true });
     }
     commitEdit(refocus = true) {
       const { r, c } = this.active; const td = this.cellTd(r, c);
@@ -2102,8 +2121,8 @@
   }
   function clearHoverRing(canvas) { const ring = canvas.querySelector('.pt-hover-ring'); if (ring) ring.remove(); }
 
-  function exportSVG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } download((graph.name || 'figure').replace(/\W+/g, '_') + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
-  function exportPNG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download((graph.name || 'figure').replace(/\W+/g, '_') + '.png', blob); toast('PNG downloaded'); }); }
+  function exportSVG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } download(safeFileName(graph.name) + '.svg', buildSVG(graph.spec), 'image/svg+xml'); toast('SVG downloaded'); }
+  function exportPNG(graph) { if (graph.spec.unavailable) { toast('Graph unavailable — correct the source data first'); return; } Charts.svgToPNG(buildSVG(graph.spec), 2, (blob) => { download(safeFileName(graph.name) + '.png', blob); toast('PNG downloaded'); }); }
 
   function makeQuickGraphSpec(table) {
     if (table.type === 'survival') {
@@ -2634,6 +2653,9 @@
     $$('[data-close]').forEach((b) => b.addEventListener('click', (e) => { const m = e.target.closest('.modal-backdrop'); if (m) m.hidden = true; }));
     $$('.modal-backdrop').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.hidden = true; }));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $$('.modal-backdrop').forEach((m) => m.hidden = true); });
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); e.stopPropagation(); openSymbols(); }
+    }, true);
     initDragDrop();
     let saved = peekSavedState();
     if (window.desktop) {
@@ -2656,6 +2678,17 @@
     if (saved) showRestorePrompt(saved);
   }
 
+  // Ctrl/⌘+G (and Edit ▸ Insert Symbol…): open the symbol palette for the focused
+  // text field, or for the selected grid cell.
+  function openSymbols() {
+    if (Symbols.isOpen()) { Symbols.close(); return; }
+    const a = document.activeElement;
+    if (Symbols.open(a, { keyboard: true })) return;
+    const wrap = a && a.closest && a.closest('.sheet-wrap');
+    if (wrap && wrap._sheet) { wrap._sheet.editForSymbols(); return; }
+    toast('Click into a name, label or title first, then press Ctrl+G for symbols');
+  }
+
   function showExampleMenu() {
     // simple inline menu via the import modal area; reuse guide modal-like popup
     const existing = $('#example-menu'); if (existing) { existing.remove(); return; }
@@ -2671,6 +2704,7 @@
 
   // API surface for the Electron desktop shell (native menu → these calls)
   window.StatLab = {
+    openSymbols,
     getStateJSON: () => JSON.stringify(snapshot(), null, 2),
     prepareSaveJSON: () => {
       // Native menu/shortcut saves do not necessarily blur the grid editor.

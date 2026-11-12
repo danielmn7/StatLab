@@ -241,7 +241,7 @@ async function exportFigure() {
   const name = await run('window.StatLab.activeGraphName()');
   const { canceled, filePath } = await dialog.showSaveDialog(win, {
     title: 'Export figure as SVG',
-    defaultPath: String(name).replace(/\W+/g, '_') + '.svg',
+    defaultPath: (String(name || 'figure').replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '') || 'figure') + '.svg',
     filters: [{ name: 'SVG image', extensions: ['svg'] }],
   });
   if (canceled || !filePath) return;
@@ -268,7 +268,15 @@ function buildMenu() {
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
-    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+        { type: 'separator' },
+        // The renderer handles the key itself so it reaches the focused field first.
+        { label: 'Insert Symbol (α, ±, µ, ²…)', accelerator: 'CmdOrCtrl+G', registerAccelerator: false, click: () => { win.webContents.focus(); run('window.StatLab.openSymbols()'); } },
+      ],
+    },
     {
       label: 'Analyze',
       submenu: [

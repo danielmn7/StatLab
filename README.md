@@ -98,6 +98,21 @@ The grid behaves like a spreadsheet:
   button to flip data that's already in the grid.
 - **Type** to start editing a cell; **Enter/Tab/arrows** to move; **Delete** clears the selection.
 
+### Greek letters & scientific symbols
+Every text field — table and column names, group names, row titles, Sample IDs,
+graph titles and axis labels, notes, dialogs — accepts special symbols
+(α β γ Δ μ σ, ± × ≤ ≥ ≈ ∞, ² ⁻¹ ₀, µ ° ℃ Å, → ⇌, ♀ ♂ …):
+- Click the small **Ω** button that appears on the field you're typing in to open
+  the symbol palette (Greek · Math · Super/sub · Units & arrows, plus your
+  recently used symbols). Click a symbol to insert it at the cursor.
+- **Ctrl+G** (⌘G on macOS, also **Edit ▸ Insert Symbol**) opens the palette from
+  the keyboard — **arrows** + **Enter** insert, **Tab** switches group, **Esc**
+  closes. On a selected grid cell it starts editing that cell first.
+- **LaTeX-style shortcuts**: type `\alpha` then **Space** → α (`\Delta` → Δ,
+  `\mu` → μ, `\micro` → µ for units, `\pm` → ±, `\deg` → °, `\le` → ≤,
+  `\^2` → ², `\^-1` → ⁻¹, `\_0` → ₀). Hover a symbol in the palette to see its
+  shortcut. **Enter**/**Tab** also complete a shortcut; **Ctrl+Z** undoes it.
+
 ## What it does
 
 ### Statistical tests
@@ -283,6 +298,7 @@ StatLab/
     data.js             data model, CSV/clipboard parsing, samples
     prism-import.js     reads GraphPad Prism .prism files (ZIP → tables + notes)
     guidance.js         test-selection decision tree + reference guidance
+    symbols.js          symbol palette + \shortcuts for Greek letters & science symbols
     app.js              UI controller (spreadsheet grid, analyses, graphs)
   tests/                verification harness (Node + Python)
 ```
