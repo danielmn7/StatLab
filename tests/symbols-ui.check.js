@@ -15,6 +15,16 @@ const run = (code) => win.webContents.executeJavaScript(code, true);
 const state = async () => JSON.parse(await run('window.StatLab.getStateJSON()'));
 const cell = (r, c) => `td.dcell[data-r="${r}"][data-c="${c}"]`;
 const CTRL = process.platform === 'darwin' ? 4 : 2;
+const JS_ESCAPE_MAP = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029',
+};
+function escapeForInjectedJS(value) {
+  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (ch) => JS_ESCAPE_MAP[ch]);
+}
 function check(name, condition) {
   assert.ok(condition, name);
   console.log('PASS', name);
@@ -31,8 +41,8 @@ async function fixture(type = 'column') {
 }
 async function pointOf(selector) {
   return run(`(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
-    if (!target || !target.checkVisibility()) throw new Error('Not visible: ' + ${JSON.stringify(selector)});
+    const target = document.querySelector(${escapeForInjectedJS(selector)});
+    if (!target || !target.checkVisibility()) throw new Error('Not visible: ' + ${escapeForInjectedJS(selector)});
     target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const rect = target.getBoundingClientRect();
     return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
@@ -59,7 +69,7 @@ async function typeText(text) {
   }
 }
 const focused = () => run(`(() => { const a = document.activeElement; return a && { tag: a.tagName, cls: a.className, value: a.value }; })()`);
-const visible = (sel) => run(`(() => { const n = document.querySelector(${JSON.stringify(sel)}); return !!n && !n.hidden && n.checkVisibility(); })()`);
+const visible = (sel) => run(`(() => { const n = document.querySelector(${escapeForInjectedJS(sel)}); return !!n && !n.hidden && n.checkVisibility(); })()`);
 
 app.whenReady().then(async () => {
   win = new BrowserWindow({ show: false, width: 1320, height: 860,
