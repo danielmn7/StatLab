@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the Windows installer on a native Windows runner and attaches it to a
-# GitHub Release whenever a version tag (e.g. v1.2.1) is pushed.
+# GitHub Release whenever a version tag (e.g. v1.3.0) is pushed.
 on:
   push:
     tags:
