@@ -298,7 +298,7 @@ StatLab/
     data.js             data model, CSV/clipboard parsing, samples
     prism-import.js     reads GraphPad Prism .prism files (ZIP → tables + notes)
     guidance.js         test-selection decision tree + reference guidance
-    symbols.js          symbol palette + \\shortcuts for Greek letters & science symbols
+    symbols.js          symbol palette + \shortcuts for Greek letters & science symbols
     app.js              UI controller (spreadsheet grid, analyses, graphs)
   tests/                verification harness (Node + Python)
 ```
