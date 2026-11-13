@@ -480,6 +480,15 @@ const Charts = (function () {
     const width = b.bold ? Math.max(base * 2.2, 2.6) : base;
     return { color, width, attr: `stroke="${color}" stroke-width="${width.toFixed(2)}"` };
   }
+  // Bar fill opacity (0 = see-through, 1 = solid). opts.barOpacity is the figure's
+  // "Bar transparency" setting; without it each builder keeps its own default (`base`).
+  function barOpacityOf(opts, base) {
+    const v = opts && opts.barOpacity;
+    return (v != null && v !== '' && isFinite(+v)) ? Math.max(0, Math.min(1, +v)) : base;
+  }
+  // Colour of the individual points drawn over a bar: the bar's own colour unless the
+  // figure sets one colour for every point (opts.pointColor).
+  function barPointColor(opts, barCol) { return (opts && opts.pointColor) || barCol; }
   // label for one bracket from its p-value per the chosen notation; falls back to a
   // pre-stored label (figures saved before p-values were retained) when p is absent.
   function sigLabel(b, notation) {
@@ -629,7 +638,7 @@ const Charts = (function () {
     const sc = withY(f, scale);
     const uid = ++_uid;
     const slot = f.pw / n, bw = slotWidth(opts, slot, 0.6, 58);
-    const barFill = opts.showPoints ? 0.5 : 0.82;   // dim the bar when points overlay it so they read clearly
+    const barFill = barOpacityOf(opts, opts.showPoints ? 0.5 : 0.82);   // by default, dim the bar when points overlay it so they read clearly
     let s = open(f, opts.title, ts);
     // zero line / y axis
     s += yAxis(f, sc, opts.yLabel || 'Value', ts);
@@ -658,7 +667,8 @@ const Charts = (function () {
         let seed = i * 99 + 7;
         const pts = st.values.map((v, vi) => { seed = (seed * 9301 + 49297) % 233280; const shape = ptShape(opts, i, vi, seriesShape); return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * bw * 0.7, r: markerRadius(3.1, shape, 0.8), shape }; });
         const offs = swarmOffsets(pts, bw * 0.35, columnReach(slot, pts), barOf(st, sc.toY, Infinity));
-        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.1, pt.shape, { fill: '#1c2733', stroke: '#ffffff', fillOpacity: 0.9, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py, pointTip(st.name, withId(st.ids && st.ids[vi], [['Value', rawNum(st.values[vi])]]))) }); });
+        const pc = barPointColor(opts, col);   // points match their bar unless the figure sets a point colour
+        pts.forEach((pt, vi) => { const px = x + offs[vi], py = pt.y; marks += markerSVG(px, py, 3.1, pt.shape, { fill: pc, stroke: pc, fillOpacity: 1, strokeWidth: 0.8, attrs: ptAttrs(i, vi, px, py, pointTip(st.name, withId(st.ids && st.ids[vi], [['Value', rawNum(st.values[vi])]]))) }); });
       }
       marks += whisker;
       // x label (outside clip)
@@ -684,7 +694,10 @@ const Charts = (function () {
 
   // Keep the series key outside the plotting area by default so significance
   // brackets never compete with it. The graph controls can move it explicitly.
-  function chartLegend(f, names, colors, opts) {
+  // Each key entry mirrors what the series is drawn with: `symbols` (optional)
+  // gives, per series, the point symbol to draw ({ shape, color }) instead of the
+  // bar swatch, so the key matches the points on the figure.
+  function chartLegend(f, names, colors, opts, fillOpacity, symbols) {
     const pos = legendPosition(opts && opts.legendPosition);
     const gap = 17;
     let x, y;
@@ -695,7 +708,9 @@ const Charts = (function () {
     let s = `<g class="chart-legend" data-position="${pos}">`;
     names.forEach((name, i) => {
       const yy = y + i * gap, col = colors[i % colors.length];
-      s += `<rect x="${x}" y="${yy - 8}" width="12" height="12" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1).attr}/>`;
+      const sym = symbols && symbols[i];
+      if (sym) s += markerSVG(x + 6, yy - 2, 4.4, sym.shape, { fill: sym.color, stroke: sym.color, fillOpacity: 1, strokeWidth: 0.8, attrs: `class="legend-symbol" data-shape="${sym.shape}"` });
+      else s += `<rect x="${x}" y="${yy - 8}" width="12" height="12" fill="${col}" fill-opacity="${fillOpacity != null ? fillOpacity : 0.82}" ${barBorderOf(opts, col, 1).attr}/>`;
       s += `<text x="${x + 18}" y="${yy + 2}" font-size="11.5" fill="#1c2733">${esc(name)}</text>`;
     });
     return s + '</g>';
@@ -983,13 +998,14 @@ const Charts = (function () {
     const errType = opts.errorType || 'sem';
     const a = rowNames.length, b = colNames.length;
     const stat = (v) => { const m = mean(v), se = sem(v), sdv = sd(v); let err = errType === 'sd' ? sdv : errType === 'ci95' ? tcrit95(v.length - 1) * se : errType === 'none' ? 0 : se; return { m, err }; };
-    const cs = cells.map((row) => row.map((c) => (c && c.length) ? Object.assign(stat(c), { n: c.length }) : { m: 0, err: 0, empty: true }));
+    const showPts = !!opts.showPoints;   // individual replicates over each bar
+    const cs = cells.map((row) => row.map((c) => (c && c.length) ? Object.assign(stat(c), { n: c.length, values: c }) : { m: 0, err: 0, empty: true }));
     let hi = 0, lo = 0;
-    cs.forEach((row) => row.forEach((c) => { if (!c.empty) { hi = Math.max(hi, c.m + c.err); lo = Math.min(lo, c.m - c.err); } }));
+    cs.forEach((row) => row.forEach((c) => { if (!c.empty) { hi = Math.max(hi, c.m + c.err, ...(showPts ? c.values : [])); lo = Math.min(lo, c.m - c.err, ...(showPts ? c.values : [])); } }));
     const yAx = opts.yAxis || {};
     const scale = axisScale(Math.min(0, lo), hi * 1.08, yAx, 6);
     const t = { log: 0, out: 0, logFail: yAx.log && !scale.log };
-    cs.forEach((row) => row.forEach((c) => { if (!c.empty) tally([c.m], scale, t); }));
+    cs.forEach((row) => row.forEach((c) => { if (!c.empty) tally(showPts ? c.values : [c.m], scale, t); }));
     const ts = textStyleOf(opts);
     // compact layout: each row's cluster of b bars at full width (46 px per bar) with a
     // clear gap between clusters; a legend above the plot needs room for its longest name
@@ -1005,16 +1021,30 @@ const Charts = (function () {
     const groupW = Math.min(slot * 0.82, b * 46);
     const barW = (groupW / b) * 0.8;
     const barX = []; // barX[i][j]
+    const barFill = barOpacityOf(opts, showPts ? 0.5 : 0.82);   // by default, dim the bar when points overlay it
+    const seriesShape = (j) => (opts.markers && opts.markers[j]) || 'circle';
+    const PT_R = 2.8, ptTop = [];   // ptTop[i][j]: highest drawn point of a bar (brackets clear it)
     let marks = '';
     for (let i = 0; i < a; i++) {
-      const cx0 = f.x0 + slot * i + slot / 2; barX[i] = [];
+      const cx0 = f.x0 + slot * i + slot / 2; barX[i] = []; ptTop[i] = [];
       for (let j = 0; j < b; j++) {
         const bx = cx0 - groupW / 2 + groupW * (j + 0.5) / b;
         barX[i][j] = bx;
         const c = cs[i][j]; if (c.empty) continue;
         const col = colors[j % colors.length];
         const yTop = sc.toY(c.m), yBase = sc.toY(baseVal(sc));
-        marks += `<rect x="${bx - barW / 2}" y="${Math.min(yTop, yBase)}" width="${barW}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="0.82" ${barBorderOf(opts, col, 1.1).attr} rx="1.5"/>`;
+        marks += `<rect x="${bx - barW / 2}" y="${Math.min(yTop, yBase)}" width="${barW}" height="${Math.abs(yBase - yTop)}" fill="${col}" fill-opacity="${barFill}" ${barBorderOf(opts, col, 1.1).attr} rx="1.5"/>`;
+        // points sit under the error bar and slide sideways off its stem and caps, as in barChart
+        if (showPts) {
+          const eb = c.err > 0 ? errorBarShape(sc.toY, c.m, c.err, true, 5, 0.6, Infinity) : null;
+          const pc = barPointColor(opts, col);
+          let seed = (i * b + j) * 99 + 7;
+          const shape = seriesShape(j);
+          const pts = c.values.map((v) => { seed = (seed * 9301 + 49297) % 233280; return { y: sc.toY(v), pref: (seed / 233280 - 0.5) * barW * 0.7, r: markerRadius(PT_R, shape, 0.8), shape }; });
+          const offs = swarmOffsets(pts, barW * 0.35, columnReach(groupW / b, pts), eb);
+          pts.forEach((pt, vi) => { const px = bx + offs[vi]; marks += markerSVG(px, pt.y, PT_R, pt.shape, { fill: pc, stroke: pc, fillOpacity: 1, strokeWidth: 0.8, attrs: 'class="bar-point" ' + hoverAttrs(px, pt.y, pointTip(`${colNames[j]} · ${rowNames[i]}`, [['Value', rawNum(c.values[vi])]])) }); });
+          ptTop[i][j] = Math.min(...pts.map((pt) => pt.y).filter((y) => isFinite(y))) - PT_R * 1.5;
+        }
         if (c.err > 0) {
           const yhi = sc.toY(c.m + c.err), ylo = sc.toY(c.m - c.err);
           marks += `<line x1="${bx}" y1="${yhi}" x2="${bx}" y2="${ylo}" stroke="#1c2733" stroke-width="1.2"/>`;
@@ -1031,7 +1061,7 @@ const Charts = (function () {
     // clears every bar under its span (not just the two endpoints), and brackets that overlap
     // in x are stacked upward so multiple comparisons stay legible.
     const gWeight = gst.bold ? 600 : 400;
-    const barTop = (i, j) => { const c = cs[i] && cs[i][j]; return (c && !c.empty) ? sc.toY(c.m + Math.max(0, c.err)) : null; };
+    const barTop = (i, j) => { const c = cs[i] && cs[i][j]; if (!c || c.empty) return null; const top = sc.toY(c.m + Math.max(0, c.err)), pt = ptTop[i] && ptTop[i][j]; return isFinite(pt) ? Math.min(top, pt) : top; };
     const brackets = [];
     (opts.sig || []).filter((g) => g.on !== false).forEach((g) => {
       const iA = g.ca != null ? g.ca : g.cat, iB = g.cb != null ? g.cb : g.cat;
@@ -1053,7 +1083,8 @@ const Charts = (function () {
       s += `<text class="sig-annotation" x="${(bk.xL + bk.xR) / 2}" y="${y - 8}" text-anchor="middle" font-size="${gst.fontSize}" font-weight="${gWeight}" fill="${gst.color}">${esc(sigLabel(bk.g, gst.notation))}</text>`;
     });
     // legend
-    s += chartLegend(f, colNames, colors, opts);
+    s += chartLegend(f, colNames, colors, opts, barFill,
+      showPts ? colNames.map((_, j) => ({ shape: seriesShape(j), color: barPointColor(opts, colors[j % colors.length]) })) : null);
     s += errLegend(f, errType);
     s += noticeSVG(f, t);
     s += '</svg>';
@@ -1118,7 +1149,8 @@ const Charts = (function () {
       marks += `<path class="grouped-line-series" data-series="${escAttr(ser.name)}" d="${path}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>`;
     });
     s += clipWrap(f, uid, marks);
-    s += chartLegend(f, colNames, colors, opts);
+    s += chartLegend(f, colNames, colors, opts, null,
+      opts.showPoints !== false ? colNames.map((_, j) => ({ shape: (opts.markers && opts.markers[j]) || 'circle', color: colors[j % colors.length] })) : null);
     s += errLegend(f, errType);
     s += '</svg>';
     return s;
@@ -1144,7 +1176,7 @@ const Charts = (function () {
     img.src = url;
   }
 
-  return { PALETTE, PALETTES, MARKERS, FIG_WIDTH: FIG_W, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf };
+  return { PALETTE, PALETTES, MARKERS, FIG_WIDTH: FIG_W, paletteById, expandPalette, markerSVG, swarmOffsets, barChart, dotPlot, boxPlot, pairedPlot, xyPlot, survivalPlot, groupedBar, groupedLine, svgToPNG, niceTicks, sigStyleOf, textStyleOf, barOpacityOf };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Charts;

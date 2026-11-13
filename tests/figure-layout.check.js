@@ -80,6 +80,8 @@ const fixtures = {
   'log-axis warnings': { chartType: 'dot', groups: [G('A', [0, 1, 10]), G('B', [-1, 5, 50])], opts: { title: 'Log', yAxis: { auto: true, min: '', max: '', log: true, sci: false, step: '' } } },
   'grouped bars with a legend above': { chartType: 'grouped', rowNames: ['Day 0', 'Day 7'], colNames: ['Wild type littermates', 'Knockout'], cells: [[[1, 2, 3], [2, 3, 4]], [[3, 4, 5], [5, 6, 7]]], opts: { title: 'Grouped', legendPosition: 'top' } },
   'grouped bars with a legend at right': { chartType: 'grouped', rowNames: ['Day 0', 'Day 7'], colNames: ['WT', 'Mutant'], cells: [[[1, 2, 3], [2, 3, 4]], [[3, 4, 5], [5, 6, 7]]], opts: { title: 'Grouped', legendPosition: 'right' } },
+  'grouped bars with points and stacked brackets': { chartType: 'grouped', rowNames: ['Pre-Infection', 'Post-Infection'], colNames: ['WT', 'CXCR3 KO'], cells: [[[52, 47, 58, 65, 40], [46, 38, 55, 59, 33]], [[41, 31, 50, 36, 45], [50, 44, 56, 52, 48]]],
+    opts: { title: 'Points', showPoints: true, barOpacity: 0.45, sig: [{ ca: 0, ja: 0, cb: 0, jb: 1, p: 0.2, on: true }, { ca: 1, ja: 0, cb: 1, jb: 1, p: 0.004, on: true }, { ca: 0, ja: 0, cb: 1, jb: 0, p: 0.0004, on: true }, { ca: 0, ja: 1, cb: 1, jb: 1, p: 0.3, on: true }] } },
 };
 
 app.whenReady().then(async () => {
