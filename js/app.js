@@ -81,7 +81,7 @@
   // Data edits must invalidate every graph/result derived from the edited table.
   // Visual controls are intentionally preserved while data-derived fields (means,
   // curves, regression and significance values) are rebuilt from the source table.
-  const LINKED_VISUAL_OPTIONS = ['title', 'xLabel', 'yLabel', 'percent', 'atRisk', 'showCI', 'showPoints', 'errorType', 'colors', 'paletteId', 'barBorder', 'barWidth', 'compactSpacing', 'markers', 'marker', 'pointColor', 'pointMarkers', 'fontStyle', 'sigStyle', 'legendPosition', 'yAxis', 'xAxis'];
+  const LINKED_VISUAL_OPTIONS = ['title', 'xLabel', 'yLabel', 'percent', 'atRisk', 'showCI', 'showPoints', 'errorType', 'colors', 'paletteId', 'barBorder', 'barOpacity', 'barWidth', 'compactSpacing', 'markers', 'marker', 'pointColor', 'pointMarkers', 'fontStyle', 'sigStyle', 'legendPosition', 'yAxis', 'xAxis'];
   function compatibleChartType(current, fresh) {
     const families = {
       grouped: ['grouped', 'grouped-line'],
@@ -1695,6 +1695,7 @@
       graph.spec.colNames = moveArr(graph.spec.colNames, idx);
       graph.spec.cells = graph.spec.cells.map((row) => moveArr(row, idx));
       if (Array.isArray(o.colors)) o.colors = moveArr(o.colors, idx);
+      if (Array.isArray(o.markers)) o.markers = moveArr(o.markers, idx);
       if (o.sig) o.sig = o.sig.map((s) => Object.assign({}, s, { ja: inv[s.ja], jb: inv[s.jb] }));
       refresh();
     }
@@ -1723,6 +1724,11 @@
       controls.append(el('div', { class: 'ctrl-note' }, o.showPoints
         ? 'Tip: hover a bar to see its mean, median, mode & range, or a point to see its value.'
         : 'Tip: hover any bar to see its mean, median, mode & range.'));
+    }
+    if (graph.spec.chartType === 'grouped') {
+      // off is stored as "unset": the Line / XY view of the same graph hides its markers on an explicit false
+      controls.append(ctrlGroup('', checkbox('Show individual points', o.showPoints === true, (v) => { if (v) o.showPoints = true; else delete o.showPoints; refresh(); })));
+      if (o.showPoints) controls.append(el('div', { class: 'ctrl-note' }, 'Tip: hover a point to see its value.'));
     }
     if (graph.spec.chartType === 'survival') {
       controls.append(ctrlGroup('', checkbox('Show 95% CI bands', o.showCI, (v) => { o.showCI = v; rerender(); })));
@@ -1788,6 +1794,29 @@
       });
       controls.append(ctrlGroup('Fine-tune colors', sw));
     }
+    // ---- bar transparency: 0% = solid fill, 100% = outline only ----
+    if (ct === 'bar' || ct === 'grouped') {
+      const pct = () => Math.round((1 - Charts.barOpacityOf(o, o.showPoints ? 0.5 : 0.82)) * 100);
+      const readout = el('span', { class: 'width-readout' }, pct() + '%');
+      const slider = el('input', { type: 'range', min: '0', max: '100', step: '5', value: pct(), 'aria-label': 'Bar transparency',
+        oninput: (e) => { o.barOpacity = (100 - parseFloat(e.target.value)) / 100; readout.textContent = pct() + '%'; rerender(); } });
+      controls.append(ctrlGroup('Bar transparency', el('div', { class: 'range-row' }, slider, readout)));
+      controls.append(el('div', { class: 'ctrl-note' }, '0% is a solid bar; 100% leaves only the outline.'));
+    }
+    // ---- individual points over bars: match each bar, or one custom color ----
+    if ((ct === 'bar' || ct === 'grouped') && o.showPoints) {
+      const picker = el('input', { type: 'color', value: toHex(o.pointColor || '#1c2733'), title: 'Point color',
+        oninput: (e) => { o.pointColor = e.target.value; rerender(); } });
+      const pickerRow = el('div', { class: 'range-row' }, picker);
+      pickerRow.style.display = o.pointColor ? 'flex' : 'none';
+      const custom = checkbox('Custom point color', !!o.pointColor, (v) => {
+        if (v) o.pointColor = picker.value; else delete o.pointColor;
+        pickerRow.style.display = v ? 'flex' : 'none';
+        rerender();
+      });
+      controls.append(ctrlGroup('Point color', el('div', { class: 'axis-ctrls' }, custom, pickerRow)));
+      controls.append(el('div', { class: 'ctrl-note' }, 'Off matches each bar’s colour; turn on to draw every point in one colour.'));
+    }
     // ---- bar outline: custom border color + bold (issue #14) ----
     if (ct === 'bar' || ct === 'grouped') {
       o.barBorder = o.barBorder || {};
@@ -1817,6 +1846,18 @@
       controls.append(ctrlGroup('Point symbols', box));
       controls.append(el('div', { class: 'ctrl-note' }, 'Double-click a single point on the figure to give that one replicate its own symbol.'));
       appendCustomPointsNote(controls, o, refresh);
+    }
+    // grouped charts: one symbol per series; the key beside the plot shows the same symbol
+    if ((ct === 'grouped' && o.showPoints) || ct === 'grouped-line') {
+      o.markers = o.markers || [];
+      const box = el('div', { class: 'marker-list' });
+      (graph.spec.colNames || []).forEach((nm, j) => {
+        const sel = el('select', { onchange: (e) => { o.markers[j] = e.target.value; rerender(); } },
+          ...Charts.MARKERS.map(([v, t]) => el('option', { value: v, selected: (o.markers[j] || 'circle') === v }, t)));
+        box.append(el('div', { class: 'marker-row' }, el('span', { class: 'marker-name', title: nm }, nm), sel));
+      });
+      controls.append(ctrlGroup('Point symbols', box));
+      controls.append(el('div', { class: 'ctrl-note' }, 'The legend shows each series with its symbol.'));
     }
     if (ct === 'xy') {
       controls.append(ctrlGroup('Point symbol', el('select', { onchange: (e) => { o.marker = e.target.value; rerender(); } },

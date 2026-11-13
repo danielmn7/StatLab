@@ -307,4 +307,71 @@ ok('box-plot outliers show their value; the box itself has none', (() => {
   return tips.length === 3 && tips.every((p, k) => p.t === 'A' && JSON.stringify(p.r) === JSON.stringify([['Outlier', '40']]) && Math.abs(p.x - cx[k]) < 0.01);
 })());
 
+// Bar transparency and point colours. Bars are the rounded rects (rx="1.5"); the
+// figure's "Bar transparency" slider stores opts.barOpacity (1 = solid).
+const barFills = (svg) => Array.from(svg.matchAll(/<rect [^>]*fill="(#[0-9a-fA-F]{6})" fill-opacity="([\d.]+)"[^>]*rx="1\.5"\/>/g), (m) => ({ fill: m[1], opacity: +m[2] }));
+const pointFills = (svg) => Array.from(svg.matchAll(/<circle [^>]*fill="(#[0-9a-fA-F]{6})" fill-opacity="([\d.]+)" stroke="(#[0-9a-fA-F]{6})"[^>]*data-pt=/g), (m) => ({ fill: m[1], opacity: +m[2], stroke: m[3] }));
+const twoColors = ['#137DE0', '#C31418'];
+ok('bars keep their default opacity until a transparency is chosen', (() => {
+  const plain = barFills(Charts.barChart(crowded, {})), withPts = barFills(barSvg), grp = barFills(grouped);
+  return plain.length === 3 && plain.every((b) => b.opacity === 0.82) && withPts.every((b) => b.opacity === 0.5) && grp.length === 6 && grp.every((b) => b.opacity === 0.82);
+})());
+ok('bar transparency sets the fill opacity of every bar (column and grouped)', (() => {
+  const col = barFills(Charts.barChart(crowded, { showPoints: true, barOpacity: 0.3 }));
+  const grp = barFills(Charts.groupedBar(cells, rows, cols, { barOpacity: 0.3 }));
+  const clear = barFills(Charts.barChart(crowded, { barOpacity: 0 })), solid = barFills(Charts.barChart(crowded, { showPoints: true, barOpacity: 1 }));
+  return col.length === 3 && col.every((b) => b.opacity === 0.3) && grp.length === 6 && grp.every((b) => b.opacity === 0.3) &&
+    clear.every((b) => b.opacity === 0) && solid.every((b) => b.opacity === 1);
+})());
+ok('an out-of-range or blank bar transparency cannot break the figure', (() =>
+  barFills(Charts.barChart(crowded, { barOpacity: 7 })).every((b) => b.opacity === 1) && barFills(Charts.barChart(crowded, { barOpacity: -2 })).every((b) => b.opacity === 0) &&
+  barFills(Charts.barChart(crowded, { barOpacity: '' })).every((b) => b.opacity === 0.82) && barFills(Charts.barChart(crowded, { barOpacity: 'x' })).every((b) => b.opacity === 0.82))());
+ok('the grouped legend swatches follow the bar transparency', (() => {
+  const sw = (svg) => Array.from(svg.match(/<g class="chart-legend"[\s\S]*?<\/g>/)[0].matchAll(/fill-opacity="([\d.]+)"/g), (m) => +m[1]);
+  return sw(grouped).every((o) => o === 0.82) && sw(Charts.groupedBar(cells, rows, cols, { barOpacity: 0.25 })).every((o) => o === 0.25) &&
+    sw(Charts.groupedLine(cells, rows, cols, { barOpacity: 0.25, showPoints: false })).every((o) => o === 0.82);
+})());
+ok('bar chart points default to the colour of their own bar, fully opaque', (() => {
+  const svg = Charts.barChart(crowded.slice(0, 2), { showPoints: true, colors: twoColors }), pts = pointsOf(svg), fills = pointFills(svg);
+  return fills.length === pts.length && fills.every((p, k) => p.fill === twoColors[pts[k].g] && p.stroke === p.fill && p.opacity === 1);
+})());
+ok('a custom point colour overrides the bar colour for every point, not the bars', (() => {
+  const svg = Charts.barChart(crowded.slice(0, 2), { showPoints: true, colors: twoColors, pointColor: '#8809B5' });
+  return pointFills(svg).length === 17 && pointFills(svg).every((p) => p.fill === '#8809B5') && barFills(svg).map((b) => b.fill).join() === twoColors.join();
+})());
+ok('grouped bars can show every replicate, coloured like its bar and inside it', (() => {
+  const none = tipsOf(grouped);
+  const svg = Charts.groupedBar(cells, rows, cols, { showPoints: true, colors: twoColors }), tips = tipsOf(svg), fills = pointFills(svg);
+  const bars = Array.from(svg.matchAll(/<rect x="([-\d.]+)" y="[-\d.]+" width="([\d.]+)"[^>]*rx="1\.5"\/>/g), (m) => ({ l: +m[1], r: +m[1] + +m[2] }));
+  // bars are drawn row by row, series within row; each holds its 3 replicates in order
+  return none.length === 0 && tips.length === 18 && bars.length === 6 && barFills(svg).every((b) => b.opacity === 0.5) &&
+    tips.every((p, k) => { const bar = Math.floor(k / 3), i = Math.floor(bar / 2), j = bar % 2;
+      return p.t === `${cols[j]} · ${rows[i]}` && JSON.stringify(p.r) === JSON.stringify([['Value', String(cells[i][j][k % 3])]]) &&
+        fills[k].fill === twoColors[j] && p.x > bars[bar].l && p.x < bars[bar].r; });
+})());
+ok('grouped bar points widen the axis and lift significance brackets clear of them', (() => {
+  const tall = [[[1, 2, 30], [2, 3, 4]], [[3, 4, 5], [5, 6, 7]]], sig = [{ ca: 0, ja: 0, cb: 0, jb: 1, p: 0.01, on: true }];
+  const svg = Charts.groupedBar(tall, ['A', 'B'], cols, { showPoints: true, sig }), top = Math.min(...tipsOf(svg).map((p) => p.y));
+  const bracketY = +svg.match(/class="sig-annotation" d="M[-\d.]+ ([-\d.]+)/)[1];
+  return tipsOf(svg).length === 12 && !/outside axis range/.test(svg) && bracketY < top - 2.8;
+})());
+
+// The key beside a grouped chart shows each series the way the figure draws it.
+const legendOf = (svg) => svg.match(/<g class="chart-legend"[\s\S]*?<\/g>/)[0];
+const legendSymbols = (svg) => Array.from(legendOf(svg).matchAll(/<(\w+) [^>]*?(?:fill|stroke)="(#[0-9a-fA-F]{6})"[^>]*class="legend-symbol" data-shape="(\w+)"/g), (m) => ({ tag: m[1], color: m[2], shape: m[3] }));
+ok('grouped bars without points keep square bar swatches in the legend', legendSymbols(grouped).length === 0 && (legendOf(grouped).match(/<rect /g) || []).length === 2);
+ok('grouped bars with points show each series symbol in the legend, in the point colour', (() => {
+  const svg = Charts.groupedBar(cells, rows, cols, { showPoints: true, colors: twoColors, markers: [null, 'triangle'] }), sym = legendSymbols(svg);
+  const drawn = Array.from(svg.matchAll(/<(\w+) [^>]*class="bar-point"/g), (m) => m[1]);
+  const custom = legendSymbols(Charts.groupedBar(cells, rows, cols, { showPoints: true, colors: twoColors, pointColor: '#8809B5' }));
+  return !/<rect /.test(legendOf(svg)) && JSON.stringify(sym) === JSON.stringify([{ tag: 'circle', color: twoColors[0], shape: 'circle' }, { tag: 'polygon', color: twoColors[1], shape: 'triangle' }]) &&
+    drawn.length === 18 && drawn.every((tag, k) => tag === (Math.floor(k / 3) % 2 ? 'polygon' : 'circle')) && custom.every((q) => q.color === '#8809B5');
+})());
+ok('line charts show each series symbol in the legend (bar swatches when markers are hidden)', (() => {
+  const sym = legendSymbols(Charts.groupedLine(cells, rows, cols, { colors: twoColors, markers: ['square', 'cross'] }));
+  const hidden = Charts.groupedLine(cells, rows, cols, { showPoints: false });
+  return JSON.stringify(sym) === JSON.stringify([{ tag: 'rect', color: twoColors[0], shape: 'square' }, { tag: 'path', color: twoColors[1], shape: 'cross' }]) &&
+    legendSymbols(hidden).length === 0 && (legendOf(hidden).match(/<rect /g) || []).length === 2;
+})());
+
 console.log(`\n${pass} UI/data checks passed`);
