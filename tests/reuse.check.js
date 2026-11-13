@@ -99,7 +99,8 @@ async function action(label) {
 }
 async function contextAction(selector, label) {
   await click(selector, 0, 'right');
-  const index = await run(`Array.from(document.querySelectorAll('#ctx-menu .ctx-item')).findIndex((entry) => entry.textContent === ${JSON.stringify(label)})`);
+  const safeLabel = escapeUnsafeChars(JSON.stringify(label));
+  const index = await run(`Array.from(document.querySelectorAll('#ctx-menu .ctx-item')).findIndex((entry) => entry.textContent === ${safeLabel})`);
   if (index < 0) throw new Error('No context-menu entry: ' + label);
   await click('#ctx-menu .ctx-item', index);
 }
