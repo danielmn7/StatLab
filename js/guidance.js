@@ -71,7 +71,15 @@ const Guidance = (function () {
       q: 'Are the groups independent or repeated/matched?',
       opts: [
         { ico: '↔️', label: 'Independent groups', sub: 'Different subjects per group', next: 'q_many_normal' },
-        { ico: '🔗', label: 'Repeated / matched', sub: 'Same subjects across conditions', next: 'rec_rm_note' },
+        { ico: '🔗', label: 'Repeated / matched', sub: 'Same subjects across conditions', next: 'q_many_rm_normal' },
+      ],
+    },
+    q_many_rm_normal: {
+      q: 'Are the differences between conditions roughly normal?',
+      hint: 'Each row must be one subject (or matched set) measured in every column.',
+      opts: [
+        { ico: '✅', label: 'Yes', sub: 'Repeated-measures one-way ANOVA', next: 'rec_rm_anova' },
+        { ico: '❌', label: 'No / ordinal', sub: "Friedman test + Dunn's", next: 'rec_friedman' },
       ],
     },
     q_many_normal: {
@@ -114,6 +122,8 @@ const Guidance = (function () {
     rec_wilcoxon_paired: rec('Wilcoxon matched-pairs signed rank test', 'wilcoxon', {}, 'Rank-based alternative to the paired t test.'),
     rec_anova: rec('One-way ANOVA', 'anova', { posthoc: 'tukey' }, 'Compares means across 3+ independent groups, with post-hoc tests to see which pairs differ.'),
     rec_kruskal: rec('Kruskal-Wallis test', 'kruskal', { posthoc: 'holm-sidak' }, "Rank-based comparison of 3+ groups, with Dunn's post-hoc tests."),
+    rec_rm_anova: rec('Repeated-measures one-way ANOVA', 'rm-anova', { posthoc: 'tukey' }, 'Compares 3+ conditions measured on the same subjects. Matching removes between-subject variation; the Geisser-Greenhouse correction avoids assuming sphericity.'),
+    rec_friedman: rec('Friedman test', 'friedman', { posthoc: 'holm-sidak' }, "Rank-based comparison of 3+ matched conditions, with Dunn's post-hoc tests."),
     rec_rm_note: rec('Repeated-measures design', 'anova', { posthoc: 'tukey', note: true }, 'For truly repeated/matched designs a repeated-measures ANOVA or Friedman test is ideal. This version runs an ordinary one-way ANOVA — interpret with care if subjects are matched.'),
     rec_pearson: rec('Pearson correlation', 'pearson', {}, 'Measures linear association between two continuous variables (r).'),
     rec_spearman: rec('Spearman correlation', 'spearman', {}, 'Measures monotonic association using ranks (ρ); robust to outliers and non-linearity.'),
@@ -189,7 +199,7 @@ const Guidance = (function () {
       name: 'Mann-Whitney U test',
       use: 'Compare two independent groups when data are ordinal, skewed, or non-normal.',
       assumptions: ['Two independent groups', 'Values can be ranked', 'Similar distribution shapes if interpreting as a median difference'],
-      interpret: 'Compares the whole distributions via ranks. An exact p-value is computed for small samples without ties.',
+      interpret: 'Compares the whole distributions via ranks. An exact p-value is computed unless the samples are large.',
       alt: 'If data are normal, the t test is more powerful.',
     },
     'wilcoxon': {
@@ -204,7 +214,21 @@ const Guidance = (function () {
       use: 'Compare means across three or more independent groups in a single test.',
       assumptions: ['Independent groups', 'Approximately normal residuals', 'Roughly equal variances (else use Welch ANOVA)'],
       interpret: 'A significant ANOVA says at least one group differs. Use post-hoc tests (Tukey, Dunnett, Holm-Šídák) to find which pairs.',
-      alt: 'Non-normal? Kruskal-Wallis. Unequal variances? Welch ANOVA (reported alongside).',
+      alt: 'Non-normal? Kruskal-Wallis. Unequal variances? Welch or Brown–Forsythe ANOVA (reported alongside) with Games-Howell, Tamhane T2 or Dunnett T3 comparisons. Same subjects in every column? Repeated-measures ANOVA.',
+    },
+    'rm-anova': {
+      name: 'Repeated-measures one-way ANOVA',
+      use: 'Compare three or more conditions measured on the same subjects (or matched sets), one subject per row.',
+      assumptions: ['Each row is one subject measured in every column', 'Differences between conditions are approximately normal', 'Sphericity, unless the Geisser-Greenhouse correction is used (the default)'],
+      interpret: 'A significant result says at least one condition mean differs. Epsilon (ε) near 1 means sphericity holds; smaller values mean a larger correction. The matching test shows whether pairing the measurements removed real between-subject variation.',
+      alt: 'Non-normal or ordinal? Friedman test. Independent groups? Ordinary one-way ANOVA. Rows with a missing value are left out; a mixed-effects model is not available.',
+    },
+    'friedman': {
+      name: 'Friedman test',
+      use: 'Compare three or more matched conditions without assuming normality.',
+      assumptions: ['Each row is one subject measured in every column', 'Values can be ranked within each row'],
+      interpret: "A significant result means at least one condition tends to rank higher or lower within subjects. Use Dunn's post-hoc tests for pairwise comparisons.",
+      alt: 'Roughly normal differences? Repeated-measures ANOVA is more powerful. Independent groups? Kruskal-Wallis.',
     },
     'kruskal': {
       name: 'Kruskal-Wallis test',

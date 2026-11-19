@@ -651,6 +651,66 @@
   // ---------- analyze modal ----------
   let analyzeState = null;
   const DIRECTIONAL_TESTS = new Set(['onesample-t', 'unpaired-t', 'paired-t', 'mannwhitney', 'wilcoxon', 'pearson', 'spearman', 'regression']);
+  // Multiple comparisons: which means are compared (family), then how the family is
+  // handled (method). The first method of each list is the default and reproduces the
+  // analyses saved by earlier versions.
+  const COMPARISON_FAMILIES = {
+    anova: ['all', 'control', 'custom', 'trend', 'none'],
+    'rm-anova': ['all', 'control', 'custom', 'none'],
+    kruskal: ['all', 'control', 'custom', 'none'],
+    friedman: ['all', 'control', 'custom', 'none'],
+  };
+  const FAMILY_LABELS = { all: 'Every pair', control: 'Each vs. a control', custom: 'Choose specific comparisons…', trend: 'Linear trend across column order', none: 'No multiple comparisons' };
+  const METHOD_LABELS = {
+    tukey: 'Tukey', dunnett: 'Dunnett', 'holm-sidak': 'Holm-Šídák', bonferroni: 'Bonferroni', sidak: 'Šídák', snk: 'Newman-Keuls',
+    lsd: 'Fisher’s LSD (no correction)', none: 'Uncorrected Dunn’s (no correction)',
+    'fdr-bh': 'False discovery rate — Benjamini-Hochberg', 'fdr-bky': 'False discovery rate — two-stage Benjamini-Krieger-Yekutieli', 'fdr-by': 'False discovery rate — Benjamini-Yekutieli',
+    'games-howell': 'Games-Howell (unequal variances)', 'tamhane-t2': 'Tamhane T2 (unequal variances)', 'dunnett-t3': 'Dunnett T3 (unequal variances)',
+  };
+  const FDR_HINT = 'Controls the false discovery rate at Q = 5%. A q value is reported in place of an adjusted P value; a starred comparison is a discovery (q < 0.05).';
+  const UNEQUAL_HINT = 'Does not assume equal SDs: each comparison uses only its own two groups, with Welch degrees of freedom.';
+  const METHOD_HINTS = {
+    snk: 'Newman-Keuls is more powerful than Tukey but does not hold the family-wise error rate at 5% with four or more groups, and gives no confidence intervals. P values refer to the number of ordered means each pair spans.',
+    lsd: 'No correction for multiple comparisons: each comparison is judged on its own at α = 0.05.',
+    none: 'No correction for multiple comparisons: each comparison is judged on its own at α = 0.05.',
+    'fdr-bh': FDR_HINT, 'fdr-bky': FDR_HINT, 'fdr-by': FDR_HINT,
+    'games-howell': UNEQUAL_HINT, 'tamhane-t2': UNEQUAL_HINT, 'dunnett-t3': UNEQUAL_HINT,
+  };
+  const methodLabel = (kind, v) => METHOD_LABELS[v] || v;
+  function comparisonMethods(kind, family) {
+    if (family === 'trend' || family === 'none') return [];
+    const fdr = ['fdr-bh', 'fdr-bky', 'fdr-by'];
+    if (kind === 'kruskal' || kind === 'friedman') {
+      return (family === 'custom' ? ['sidak', 'bonferroni', 'holm-sidak'] : ['holm-sidak', 'bonferroni', 'sidak']).concat('none', fdr);
+    }
+    const unequal = kind === 'anova' ? ['tamhane-t2', 'dunnett-t3'] : [];
+    if (family === 'control') return ['dunnett', 'holm-sidak', 'bonferroni', 'sidak', 'lsd'].concat(fdr, unequal);
+    if (family === 'custom') return ['sidak', 'bonferroni', 'holm-sidak', 'lsd'].concat(fdr, unequal);
+    return ['tukey', 'holm-sidak', 'bonferroni', 'sidak', 'snk', 'lsd'].concat(fdr, kind === 'anova' ? ['games-howell'] : [], unequal);
+  }
+  // What a two-way "control" can be for each comparison direction; the cell list is
+  // row-major, matching the engine's cell index (row * columns + column).
+  // Simple-effect directions, the only ones where the definition of a family is a choice.
+  const TWO_WAY_SIMPLE = new Set(['colsWithinRow', 'rowsWithinCol']);
+  // The family definition a two-way spec means: 'each' (one per row or column group),
+  // 'all' (one for the whole table), or null where there is no choice. Specs saved
+  // before the choice existed keep what was computed then: Tukey and Dunnett per row,
+  // the p-value corrections over all rows together.
+  function twoWayFamily(spec) {
+    if (!TWO_WAY_SIMPLE.has(spec.phdir || 'colsWithinRow')) return null;
+    if (spec.phmethod === 'tukey' || spec.phmethod === 'dunnett') return 'each';
+    return spec.phfamily === 'each' ? 'each' : 'all';
+  }
+  function twoWayReplicated(table) {
+    const cells = table.cellsMatrix().cells;
+    return cells.every((row) => row.every((c) => c && c.length)) && cells.some((row) => row.some((c) => c.length > 1));
+  }
+  function twoWayControlLevels(table, direction) {
+    const cm = table.cellsMatrix();
+    if (direction === 'rowsWithinCol' || direction === 'rowMeans') return cm.rowNames;
+    if (direction === 'cells') return cm.rowNames.flatMap((r) => cm.colNames.map((c) => r + ' · ' + c));
+    return cm.colNames;
+  }
   function tailName(alternative) { return alternative === 'two-sided' ? 'two-tailed' : 'one-tailed, ' + alternative; }
   function hypothesisText(table, kind, alternative, mu0) {
     const op = alternative === 'greater' ? '>' : alternative === 'less' ? '<' : '≠';
@@ -697,6 +757,8 @@
     if (ng >= 3) {
       list.push({ kind: 'anova', name: 'One-way ANOVA', desc: 'Compare 3+ means + post-hoc', tag: 'Parametric', rec: true });
       list.push({ kind: 'kruskal', name: 'Kruskal-Wallis', desc: 'Non-parametric 3+ groups + Dunn’s', tag: 'Rank-based' });
+      list.push({ kind: 'rm-anova', name: 'Repeated-measures ANOVA', desc: 'Rows are matched subjects; Geisser-Greenhouse', tag: 'Paired' });
+      list.push({ kind: 'friedman', name: 'Friedman test', desc: 'Non-parametric matched rows + Dunn’s', tag: 'Paired' });
     }
     if (ng === 2) {
       list.push({ kind: 'unpaired-t', name: 'Unpaired t test', desc: "Student's or Welch's correction", tag: 'Parametric', rec: true });
@@ -781,32 +843,39 @@
       }
       return wrap;
     };
-    if (kind === 'anova') {
-      const gnames = table.groups().map((g) => g.name);
-      p.compMode = p.compMode || 'tukey';
-      box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Comparisons'),
-        el('select', { class: 'inp', onchange: (e) => { p.compMode = e.target.value; renderAnalyzeOpts(); } },
-          ...[['tukey', 'Every pair — Tukey'], ['holm-sidak', 'Every pair — Holm-Šídák'], ['bonferroni', 'Every pair — Bonferroni'], ['dunnett', 'Each vs. control — Dunnett'], ['custom', 'Choose specific comparisons…']].map(([v, t]) => el('option', { value: v, selected: p.compMode === v }, t)))));
-      if (p.compMode === 'dunnett') {
-        p.control = p.control != null ? p.control : 0;
-        box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Control group'),
-          el('select', { class: 'inp', onchange: (e) => { p.control = +e.target.value; } }, ...gnames.map((nm, i) => el('option', { value: i, selected: +p.control === i }, nm)))));
-      }
-      if (p.compMode === 'custom') {
-        box.append(el('div', { class: 'opt-row', style: 'align-items:flex-start' }, el('label', {}, 'Select pairs'), pairPicker(gnames)));
-        box.append(sel('Correction', 'customCorr', [{ v: 'sidak', t: 'Šídák' }, { v: 'bonferroni', t: 'Bonferroni' }, { v: 'holm-sidak', t: 'Holm-Šídák' }], 'sidak'));
-      }
+    if (kind === 'rm-anova') {
+      const picker = sel('Sphericity', 'sphericity', [
+        { v: 'gg', t: 'Geisser-Greenhouse correction (recommended — no sphericity assumption)' },
+        { v: 'assumed', t: 'Assume sphericity (equal variability of all differences)' }], 'gg');
+      $('select', picker).id = 'analyze-sphericity';
+      box.append(picker, el('div', { class: 'note' }, 'Each row is one subject (or matched set) measured in every column. Rows with a missing value are left out.'));
     }
-    if (kind === 'kruskal') {
+    if (kind === 'friedman') box.append(el('div', { class: 'note' }, 'Each row is one subject (or matched set) measured in every column. Values are ranked within each row; rows with a missing value are left out.'));
+    if (COMPARISON_FAMILIES[kind]) {
+      // Two steps, as in the comparison itself: which means to compare, then how to
+      // account for making several comparisons.
       const gnames = table.groups().map((g) => g.name);
-      p.compMode = p.compMode || 'holm-sidak';
-      box.append(el('div', { class: 'opt-row' }, el('label', {}, "Dunn comparisons"),
-        el('select', { class: 'inp', onchange: (e) => { p.compMode = e.target.value; renderAnalyzeOpts(); } },
-          ...[['holm-sidak', 'Every pair — Holm-Šídák'], ['bonferroni', 'Every pair — Bonferroni'], ['sidak', 'Every pair — Šídák'], ['custom', 'Choose specific comparisons…']].map(([v, t]) => el('option', { value: v, selected: p.compMode === v }, t)))));
-      if (p.compMode === 'custom') {
-        box.append(el('div', { class: 'opt-row', style: 'align-items:flex-start' }, el('label', {}, 'Select pairs'), pairPicker(gnames)));
-        box.append(sel('Correction', 'customCorr', [{ v: 'sidak', t: 'Šídák' }, { v: 'bonferroni', t: 'Bonferroni' }, { v: 'holm-sidak', t: 'Holm-Šídák' }], 'sidak'));
+      const families = COMPARISON_FAMILIES[kind];
+      if (!families.includes(p.family)) p.family = 'all';
+      box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-family' }, kind === 'kruskal' || kind === 'friedman' ? 'Dunn comparisons' : 'Comparisons'),
+        el('select', { id: 'analyze-family', class: 'inp', onchange: (e) => { p.family = e.target.value; p.method = null; renderAnalyzeOpts(); } },
+          ...families.map((v) => el('option', { value: v, selected: p.family === v }, FAMILY_LABELS[v])))));
+      const methods = comparisonMethods(kind, p.family);
+      if (methods.length) {
+        if (!methods.includes(p.method)) p.method = methods[0];
+        box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-method' }, p.family === 'custom' ? 'Correction' : 'Method'),
+          el('select', { id: 'analyze-method', class: 'inp', onchange: (e) => { p.method = e.target.value; renderAnalyzeOpts(); } },
+            ...methods.map((v) => el('option', { value: v, selected: p.method === v }, methodLabel(kind, v))))));
+        const hint = METHOD_HINTS[p.method];
+        if (hint) box.append(el('div', { class: 'note', id: 'analyze-method-hint' }, hint));
       }
+      if (p.family === 'control') {
+        p.control = p.control != null ? p.control : 0;
+        box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-control' }, 'Control group'),
+          el('select', { id: 'analyze-control', class: 'inp', onchange: (e) => { p.control = +e.target.value; } }, ...gnames.map((nm, i) => el('option', { value: i, selected: +p.control === i }, nm)))));
+      }
+      if (p.family === 'custom') box.append(el('div', { class: 'opt-row', style: 'align-items:flex-start' }, el('label', {}, 'Select pairs'), pairPicker(gnames)));
+      if (p.family === 'trend') box.append(el('div', { class: 'note' }, 'Tests whether the means rise or fall steadily from the first column to the last. Column order matters: arrange the columns in their natural order (dose, time).'));
     }
     if (kind === 'srh') {
       p.rowFactor = p.rowFactor || 'Rows'; p.colFactor = p.colFactor || 'Columns';
@@ -818,14 +887,49 @@
       p.rowFactor = p.rowFactor || 'Rows'; p.colFactor = p.colFactor || 'Columns';
       box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Name the row factor'), el('input', { class: 'inp', value: p.rowFactor, oninput: (e) => { p.rowFactor = e.target.value; } })));
       box.append(el('div', { class: 'opt-row' }, el('label', {}, 'Name the column factor'), el('input', { class: 'inp', value: p.colFactor, oninput: (e) => { p.colFactor = e.target.value; } })));
-      box.append(sel('Multiple comparisons', 'phmethod', [{ v: 'sidak', t: 'Šídák (recommended)' }, { v: 'tukey', t: 'Tukey' }, { v: 'holm-sidak', t: 'Holm-Šídák' }, { v: 'bonferroni', t: 'Bonferroni' }], 'sidak'));
-      box.append(sel('Compare', 'phdir', [
+      const model = sel('Model', 'interaction', [{ v: 'full', t: 'Fit the interaction (recommended)' }, { v: 'additive', t: 'Main effects only (no interaction term)' }], 'full');
+      $('select', model).id = 'analyze-interaction';
+      $('select', model).addEventListener('change', renderAnalyzeOpts);
+      // Without an interaction term (chosen, or one value per cell) the model has no
+      // simple effects, so only the two main-effect comparisons are offered.
+      const noInteraction = p.interaction === 'additive' || !twoWayReplicated(table);
+      if (noInteraction && p.phdir) p.phdir = p.phdir === 'rowsWithinCol' || p.phdir === 'rowMeans' ? 'rowMeans' : 'colMeans';
+      const method = sel('Multiple comparisons', 'phmethod', [{ v: 'sidak', t: 'Šídák (recommended)' }, { v: 'tukey', t: 'Tukey' }, { v: 'holm-sidak', t: 'Holm-Šídák' }, { v: 'bonferroni', t: 'Bonferroni' },
+        { v: 'dunnett', t: 'Dunnett (each vs. a control)' }, { v: 'lsd', t: 'Fisher’s LSD (no correction)' },
+        ...['fdr-bh', 'fdr-bky', 'fdr-by'].map((v) => ({ v, t: methodLabel('twoway', v) }))], 'sidak');
+      $('select', method).id = 'analyze-phmethod';
+      $('select', method).addEventListener('change', renderAnalyzeOpts);
+      const direction = sel('Compare', 'phdir', [
         { v: 'colsWithinRow', t: 'Column groups within each row (simple effects)' },
         { v: 'rowsWithinCol', t: 'Rows within each column group (simple effects)' },
         { v: 'colMeans', t: 'Column-group means (main effect)' },
         { v: 'rowMeans', t: 'Row means (main effect)' },
         { v: 'cells', t: 'Every cell vs every cell' },
-      ], 'colsWithinRow'));
+      ].filter((o) => !noInteraction || o.v === 'colMeans' || o.v === 'rowMeans'), noInteraction ? 'colMeans' : 'colsWithinRow');
+      $('select', direction).id = 'analyze-phdir';
+      $('select', direction).addEventListener('change', () => { p.phcontrol = 0; renderAnalyzeOpts(); });
+      box.append(model, method, direction);
+      if (noInteraction) box.append(el('div', { class: 'note', id: 'analyze-phdir-note' }, (p.interaction === 'additive' ? 'Without an interaction term' : 'With one value per cell no interaction can be fitted, so')
+        + ' the model gives each column group one effect shared by every row. Only main effects can be compared; they use the model’s estimated marginal means.'));
+      if (TWO_WAY_SIMPLE.has(p.phdir)) {
+        // Tukey and Dunnett are defined for one set of means, so they keep one family per row.
+        const single = p.phmethod === 'tukey' || p.phmethod === 'dunnett';
+        if (single || p.phfamily !== 'all') p.phfamily = 'each';
+        const unit = p.phdir === 'colsWithinRow' ? 'row' : 'column group';
+        box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-phfamily' }, 'Families'),
+          el('select', { id: 'analyze-phfamily', class: 'inp', onchange: (e) => { p.phfamily = e.target.value; renderAnalyzeOpts(); } },
+            el('option', { value: 'each', selected: p.phfamily === 'each' }, 'One family per ' + unit + ' (recommended)'),
+            el('option', { value: 'all', selected: p.phfamily === 'all', disabled: single }, 'One family for all comparisons (conservative)' + (single ? ' — not with Tukey or Dunnett' : '')))));
+        box.append(el('div', { class: 'note', id: 'analyze-phfamily-note' }, p.phfamily === 'all'
+          ? 'The correction counts every comparison in the table together: stricter, with less power.'
+          : 'The correction is applied separately within each ' + unit + ', so each ' + unit + ' is judged on its own comparisons.'));
+      }
+      if (p.phmethod === 'dunnett') {
+        const levels = twoWayControlLevels(table, p.phdir);
+        if (!(+p.phcontrol < levels.length)) p.phcontrol = 0;
+        box.append(el('div', { class: 'opt-row' }, el('label', { for: 'analyze-phcontrol' }, 'Control'),
+          el('select', { id: 'analyze-phcontrol', class: 'inp', onchange: (e) => { p.phcontrol = +e.target.value; } }, ...levels.map((nm, i) => el('option', { value: i, selected: +p.phcontrol === i }, nm)))));
+      }
     }
     if (kind === 'grubbs') {
       box.append(sel('Mode', 'iterative', [{ v: 'single', t: 'Single most extreme value' }, { v: 'iterative', t: 'Iterative (find several / ESD)' }], 'single'));
@@ -876,19 +980,32 @@
     if (DIRECTIONAL_TESTS.has(kind)) out.alternative = p.alternative || 'two-sided';
     if (kind === 'unpaired-t') out.welch = p.welch !== 'student';
     if (kind === 'onesample-t' || (kind === 'wilcoxon' && p.mu0 != null)) out.mu0 = parseFloat(p.mu0) || 0;
-    if (kind === 'anova') {
-      const mode = p.compMode || 'tukey';
-      if (mode === 'custom') { out.posthoc = 'custom'; out.pairs = p.pairs || []; out.correction = p.customCorr || 'sidak'; }
-      else if (mode === 'dunnett') { out.posthoc = 'dunnett'; out.control = p.control || 0; }
-      else out.posthoc = mode;
+    // Stored comparison choices. The shapes older projects saved are kept as they are:
+    // posthoc 'tukey' / 'dunnett' + control / 'custom' + pairs + correction for means,
+    // and posthoc + optional pairs for Dunn. Newer choices only add fields.
+    if (COMPARISON_FAMILIES[kind]) {
+      const rank = kind === 'kruskal' || kind === 'friedman';
+      const family = COMPARISON_FAMILIES[kind].includes(p.family) ? p.family : 'all';
+      const methods = comparisonMethods(kind, family);
+      const method = methods.includes(p.method) ? p.method : methods[0];
+      if (family === 'none') out.posthoc = 'off';
+      else if (family === 'trend') out.posthoc = 'trend';
+      else if (family === 'custom') {
+        out.pairs = p.pairs || [];
+        if (rank) out.posthoc = method; else { out.posthoc = 'custom'; out.correction = method; }
+      } else if (family === 'control') {
+        out.posthoc = method; out.control = p.control || 0;
+        if (method !== 'dunnett') out.family = 'control';
+      } else out.posthoc = method;
     }
-    if (kind === 'kruskal') {
-      const mode = p.compMode || 'holm-sidak';
-      if (mode === 'custom') { out.posthoc = p.customCorr || 'sidak'; out.pairs = p.pairs || []; }
-      else out.posthoc = mode;
-    }
+    if (kind === 'rm-anova' && p.sphericity === 'assumed') out.sphericity = true;
     if (kind === 'grubbs') out.iterative = p.iterative === 'iterative';
-    if (kind === 'twoway') { out.rowFactor = p.rowFactor || 'Rows'; out.colFactor = p.colFactor || 'Columns'; out.phmethod = p.phmethod || 'sidak'; out.phdir = p.phdir || 'colsWithinRow'; }
+    if (kind === 'twoway') {
+      out.rowFactor = p.rowFactor || 'Rows'; out.colFactor = p.colFactor || 'Columns'; out.phmethod = p.phmethod || 'sidak'; out.phdir = p.phdir || 'colsWithinRow';
+      if (p.interaction === 'additive') out.interaction = false;
+      if (out.phmethod === 'dunnett') out.phcontrol = +p.phcontrol || 0;
+      if (TWO_WAY_SIMPLE.has(out.phdir)) out.phfamily = twoWayFamily(Object.assign({}, out, { phfamily: p.phfamily === 'all' ? 'all' : 'each' }));
+    }
     if (kind === 'srh') { out.rowFactor = p.rowFactor || 'Rows'; out.colFactor = p.colFactor || 'Columns'; }
     return out;
   }
@@ -952,6 +1069,14 @@
     if ((kind === 'onesample-t' || kind === 'wilcoxon') && s.mu0 === undefined) s.mu0 = 0;
     if (kind === 'anova') { s.posthoc = s.posthoc || 'tukey'; s.note = !!s.note; }
     if (kind === 'kruskal') s.posthoc = s.posthoc || 'holm-sidak';
+    if (kind === 'rm-anova') { s.posthoc = s.posthoc || 'tukey'; s.sphericity = !!s.sphericity; }
+    if (kind === 'friedman') s.posthoc = s.posthoc || 'holm-sidak';
+    if (kind === 'twoway') {
+      s.interaction = s.interaction !== false; // older specs always fitted it when they could
+      // Without an interaction only main effects exist; older specs may name a simple effect.
+      if (!s.interaction) s.phdir = s.phdir === 'rowsWithinCol' || s.phdir === 'rowMeans' ? 'rowMeans' : 'colMeans';
+      s.phfamily = twoWayFamily(s); // older specs carry no family choice
+    }
     if (kind === 'grubbs') s.iterative = !!s.iterative;
     if (Array.isArray(s.pairs)) s.pairs = s.pairs.map((pair) => pair.slice().sort((a, b) => a - b)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     return JSON.stringify(Object.keys(s).sort().map((k) => [k, s[k]]));
@@ -965,13 +1090,21 @@
     const kind = spec.kind, parts = [];
     if (kind === 'unpaired-t') parts.push(spec.welch ? 'Welch’s' : 'Student’s');
     if (kind === 'onesample-t' || (kind === 'wilcoxon' && spec.mu0 !== undefined && table.groups().length === 1)) parts.push('H₀ = ' + num(spec.mu0 === undefined ? 0 : spec.mu0));
-    if (kind === 'anova') {
-      if (spec.posthoc === 'dunnett') { const control = table.groups()[spec.control || 0]; parts.push('Dunnett' + (control ? ' vs ' + control.name : '')); }
+    if (kind === 'rm-anova' && spec.sphericity) parts.push('sphericity assumed');
+    if (kind === 'anova' || kind === 'rm-anova') {
+      const control = table.groups()[spec.control || 0];
+      if (spec.posthoc === 'dunnett') parts.push('Dunnett' + (control ? ' vs ' + control.name : ''));
       else if (spec.posthoc === 'custom') parts.push('selected pairs, ' + posthocName(spec.correction || 'sidak'));
+      else if (spec.family === 'control') parts.push('each vs ' + (control ? control.name : 'control') + ', ' + posthocName(spec.posthoc));
       else parts.push(posthocName(spec.posthoc || 'tukey'));
     }
-    if (kind === 'kruskal') parts.push((Array.isArray(spec.pairs) ? 'selected pairs, ' : '') + posthocName(spec.posthoc || 'holm-sidak'));
-    if (kind === 'twoway' && spec.phmethod) parts.push(posthocName(spec.phmethod), { colsWithinRow: 'columns within rows', rowsWithinCol: 'rows within columns', colMeans: 'column means', rowMeans: 'row means', cells: 'every cell' }[spec.phdir] || spec.phdir);
+    if (kind === 'kruskal' || kind === 'friedman') {
+      const control = table.groups()[spec.control || 0];
+      parts.push((Array.isArray(spec.pairs) ? 'selected pairs, ' : spec.family === 'control' ? 'each vs ' + (control ? control.name : 'control') + ', ' : '') + dunnName(spec.posthoc || 'holm-sidak'));
+    }
+    if (kind === 'twoway' && spec.interaction === false) parts.push('main effects only');
+    if (kind === 'twoway' && spec.phmethod) parts.push(posthocName(spec.phmethod) + (spec.phmethod === 'dunnett' ? ' vs ' + (twoWayControlLevels(table, spec.phdir)[spec.phcontrol || 0] || 'control') : ''), { colsWithinRow: 'columns within rows', rowsWithinCol: 'rows within columns', colMeans: 'column means', rowMeans: 'row means', cells: 'every cell' }[spec.phdir] || spec.phdir,
+      spec.phfamily === 'all' ? 'one family for all' : null);
     if ((kind === 'twoway' || kind === 'srh') && spec.rowFactor) parts.push(spec.rowFactor + ' × ' + spec.colFactor);
     if (kind === 'grubbs') parts.push(spec.iterative ? 'iterative' : 'single outlier');
     if (DIRECTIONAL_TESTS.has(kind)) parts.push(tailName(spec.alternative || 'two-sided'));
@@ -1204,7 +1337,7 @@
         hypothesisVerdict(table, spec, alternative, r.p, `${a.name} and ${b.name} differ significantly.`, `No significant difference between ${a.name} and ${b.name}.`),
         statsTable([[alternative === 'two-sided' ? 'Mann-Whitney U' : 'Mann-Whitney U (first group)', num(alternative === 'two-sided' ? r.U : r.U1, 1)], ['Sum of ranks', `${num(r.R1, 1)} / ${num(r.R2, 1)}`], ['Median ' + a.name, num(T.describe(a.values).median)], ['Median ' + b.name, num(T.describe(b.values).median)], ['Method', r.method], [pLabel, fmtP(r.p)]]),
         apaLine(`U = ${num(alternative === 'two-sided' ? r.U : r.U1, 1)}, ${reportP(r.p)}.`),
-        el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value (small sample, no ties).' : 'Normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
+        el('div', { class: 'note' }, r.method.startsWith('exact') ? 'Exact p-value' + (r.hasTies ? ' (tied values included).' : '.') : 'Sample too large for an exact p-value: normal approximation with continuity correction' + (r.hasTies ? ' and tie correction.' : '.')));
       return wrap(`Mann-Whitney: ${a.name} vs ${b.name}`, node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: [{ i: 0, j: 1, name: `${a.name} vs ${b.name}`, label: stars(r.p), p: r.p, sig: r.p < 0.05, on: true }] }));
     }
 
@@ -1218,7 +1351,7 @@
         hypothesisVerdict(table, spec, alternative, r.p, oneSample ? `The median differs significantly from ${num(mu0)}.` : 'The paired difference is statistically significant.', oneSample ? `No significant difference from ${num(mu0)}.` : 'No significant paired difference.'),
         statsTable([[alternative === 'two-sided' ? 'W (signed-rank)' : 'W (positive ranks)', num(W, 1)], ['Sum of positive ranks', num(r.Wpos, 1)], ['Sum of negative ranks', num(r.Wneg, 1)], [oneSample ? 'n values (non-zero differences)' : 'n pairs (non-zero)', r.n], ...(oneSample ? [['Hypothetical median', num(mu0)]] : []), ['Method', r.method], [pLabel, fmtP(r.p)]]),
         apaLine(`W = ${num(W, 1)}, ${reportP(r.p)}.`),
-        el('div', { class: 'note' }, 'Normal approximation with continuity and tie correction; zero differences are omitted.'));
+        el('div', { class: 'note' }, (r.method === 'exact' ? 'Exact p-value' : 'More than 200 pairs: normal approximation with continuity and tie correction') + '; zero differences are omitted.'));
       const gspec = oneSample
         ? graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none' })
         : graphSpec('paired', groups, Object.assign({ title: table.name, yLabel: 'Value', labelA: groups[0].name, labelB: groups[1].name, colA: rawA, colB: rawB }, rowIdsOpt(table)));
@@ -1227,39 +1360,84 @@
 
     if (kind === 'anova') {
       const r = T.oneWayANOVA(groups);
-      const ph = T.posthoc(r, spec.posthoc, { control: spec.control, pairs: spec.pairs, correction: spec.correction });
+      const cmp = meanComparisons(spec, groups, (method, opts) => T.posthoc(r, method, opts), r);
       const at = el('table', { class: 'stats' });
       at.append(el('thead', {}, el('tr', {}, ...['Source', 'SS', 'df', 'MS', 'F', 'P'].map((h) => el('th', {}, h)))));
       at.append(el('tbody', {},
         el('tr', {}, el('td', {}, 'Between groups'), el('td', { class: 'num' }, num(r.ssB)), el('td', { class: 'num' }, r.dfB), el('td', { class: 'num' }, num(r.msB)), el('td', { class: 'num' }, num(r.F, 4)), el('td', { class: 'num' }, fmtP(r.p))),
         el('tr', {}, el('td', {}, 'Within groups'), el('td', { class: 'num' }, num(r.ssW)), el('td', { class: 'num' }, r.dfW), el('td', { class: 'num' }, num(r.msW)), el('td', {}, ''), el('td', {}, '')),
         el('tr', {}, el('td', {}, 'Total'), el('td', { class: 'num' }, num(r.ssT)), el('td', { class: 'num' }, r.dfB + r.dfW), el('td', {}, ''), el('td', {}, ''), el('td', {}, ''))));
-      const phTable = posthocTable(ph, spec.posthoc);
-      const sg = sigFromPosthoc(ph, groups);
       const node = card('One-way ANOVA',
         verdict(r.p, 'At least one group mean differs significantly.', 'No significant differences among group means.'),
         at,
         statsTable([['F', `F(${r.dfB}, ${r.dfW}) = ${num(r.F, 4)}`], ['P value', fmtP(r.p)], ['R² (η²)', num(r.eta2, 4)], ['ω²', num(r.omega2, 4)]]),
-        el('div', { class: 'section-label' }, 'Welch ANOVA (does not assume equal variances)'),
-        statsTable([['Welch F', `F(${r.welch.df1}, ${num(r.welch.df2, 1)}) = ${num(r.welch.F, 4)}`], ['Welch P', fmtP(r.welch.p)]]),
-        el('div', { class: 'section-label' }, 'Post-hoc: ' + (spec.posthoc === 'dunnett' ? 'Dunnett vs ' + groups[spec.control || 0].name : posthocName(spec.posthoc))),
-        phTable,
-        spec.note ? el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Your design is repeated/matched — a repeated-measures ANOVA would be more appropriate. These results assume independent groups.') : null,
+        el('div', { class: 'section-label' }, 'Welch and Brown–Forsythe ANOVA (do not assume equal variances)'),
+        statsTable([['Welch F', `F(${r.welch.df1}, ${num(r.welch.df2, 1)}) = ${num(r.welch.F, 4)}`], ['Welch P', fmtP(r.welch.p)],
+          ['Brown–Forsythe F', `F(${r.brownForsytheF.df1}, ${num(r.brownForsytheF.df2, 1)}) = ${num(r.brownForsytheF.F, 4)}`], ['Brown–Forsythe P', fmtP(r.brownForsytheF.p)]]),
+        equalVarianceTests(groups),
+        ...cmp.nodes,
+        spec.note ? el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Your design is repeated/matched — a repeated-measures ANOVA would be more appropriate (Analyze → Repeated-measures ANOVA). These results assume independent groups.') : null,
         assumptionNoteMulti(groups));
-      return wrap('One-way ANOVA', node, graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sg }));
+      return wrap('One-way ANOVA', node, graphSpec('bar', groups, { title: table.name, yLabel: 'Value', errorType: 'sem', sig: cmp.sig }));
+    }
+
+    if (kind === 'rm-anova') {
+      const r = T.rmANOVA(rawColumnGroups(table), groups.map((g) => g.name), { sphericity: !!spec.sphericity });
+      if (r.error) return wrap('Repeated-measures ANOVA', card('Repeated-measures one-way ANOVA', el('div', { class: 'verdict warn', role: 'status' }, el('span', { class: 'vicon' }, '⚠'), el('span', {}, r.error))), null);
+      // Graph and comparisons use the matched rows only, so they describe the same data as F.
+      const matched = groups.map((g, j) => ({ name: g.name, values: r._data[j] }));
+      const cmp = meanComparisons(spec, matched, (method, opts) => T.rmPosthoc(r, method, opts), null);
+      const at = el('table', { class: 'stats' });
+      at.append(el('thead', {}, el('tr', {}, ...['Source', 'SS', 'df', 'MS', 'F', 'P'].map((h) => el('th', {}, h)))));
+      at.append(el('tbody', {},
+        el('tr', {}, el('td', {}, 'Treatment (between columns)'), el('td', { class: 'num' }, num(r.ssTreat)), el('td', { class: 'num' }, r.dfTreat), el('td', { class: 'num' }, num(r.msTreat)), el('td', { class: 'num' }, num(r.F, 4)), el('td', { class: 'num' }, fmtP(r.p))),
+        el('tr', {}, el('td', {}, 'Individual (between rows)'), el('td', { class: 'num' }, num(r.ssSubj)), el('td', { class: 'num' }, r.dfSubj), el('td', { class: 'num' }, num(r.msSubj)), el('td', { class: 'num' }, num(r.matching.F, 4)), el('td', { class: 'num' }, fmtP(r.matching.p))),
+        el('tr', {}, el('td', {}, 'Residual'), el('td', { class: 'num' }, num(r.ssRes)), el('td', { class: 'num' }, r.dfRes), el('td', { class: 'num' }, num(r.msRes)), el('td', {}, ''), el('td', {}, '')),
+        el('tr', {}, el('td', {}, 'Total'), el('td', { class: 'num' }, num(r.ssTot)), el('td', { class: 'num' }, r.n * r.k - 1), el('td', {}, ''), el('td', {}, ''), el('td', {}, ''))));
+      const node = card('Repeated-measures one-way ANOVA',
+        verdict(r.p, 'At least one condition mean differs significantly.', 'No significant differences among condition means.'),
+        at,
+        statsTable([
+          ['F', r.sphericity ? `F(${r.dfTreat}, ${r.dfRes}) = ${num(r.F, 4)}` : `F(${num(r.df1, 3)}, ${num(r.df2, 3)}) = ${num(r.F, 4)}`],
+          [r.sphericity ? 'P value (sphericity assumed)' : 'P value (Geisser-Greenhouse)', fmtP(r.p)],
+          ['Geisser-Greenhouse ε', num(r.epsilon, 4)],
+          ['Matched rows analyzed', r.n],
+          ['Was the matching effective?', `F(${r.matching.df1}, ${r.matching.df2}) = ${num(r.matching.F, 4)}, ${pText(r.matching.p)}`]]),
+        el('div', { class: 'note' }, r.sphericity
+          ? 'Sphericity is assumed: comparisons share the residual mean square.'
+          : 'No sphericity assumption: the degrees of freedom are multiplied by ε, and each comparison uses only the differences between its own two columns.'),
+        r.partialRows ? el('div', { class: 'note', style: 'color:var(--warn)' }, `⚠ ${r.partialRows} row${r.partialRows === 1 ? '' : 's'} with a missing value ${r.partialRows === 1 ? 'was' : 'were'} left out: repeated-measures ANOVA needs a value in every column.`) : null,
+        ...cmp.nodes);
+      return wrap('Repeated-measures ANOVA', node, graphSpec('bar', matched, { title: table.name, yLabel: 'Value', errorType: 'sem', sig: cmp.sig }));
+    }
+
+    if (kind === 'friedman') {
+      const r = T.friedman(rawColumnGroups(table), groups.map((g) => g.name));
+      if (r.error) return wrap('Friedman test', card('Friedman test', el('div', { class: 'verdict warn', role: 'status' }, el('span', { class: 'vicon' }, '⚠'), el('span', {}, r.error))), null);
+      const matched = groups.map((g, j) => ({ name: g.name, values: r._data[j] }));
+      const cmp = rankComparisons(spec, matched, (method, opts) => T.friedmanDunn(r, method, opts));
+      const node = card('Friedman test',
+        verdict(r.p, 'At least one condition differs significantly (by within-row ranks).', 'No significant differences among conditions.'),
+        statsTable([['Friedman statistic (χ²)', num(r.Q, 4)], ['df', r.df], ['P value', fmtP(r.p)], ['Tie correction', num(r.tieCorrection, 4)], ['Matched rows analyzed', r.n]]),
+        el('div', { class: 'note' }, r.method === 'exact' ? 'Exact P value (small table; ties within rows included).' : 'Table too large for an exact P value: chi-square approximation, corrected for ties within rows.'),
+        r.partialRows ? el('div', { class: 'note', style: 'color:var(--warn)' }, `⚠ ${r.partialRows} row${r.partialRows === 1 ? '' : 's'} with a missing value ${r.partialRows === 1 ? 'was' : 'were'} left out: the Friedman test needs a value in every column.`) : null,
+        el('div', { class: 'section-label' }, 'Rank sums'),
+        statsTable(r.names.map((nm, i) => [nm, num(r.rankSums[i], 2) + `  (mean rank ${num(r.meanRanks[i], 2)})`])),
+        ...cmp.nodes);
+      return wrap('Friedman test', node, graphSpec('dot', matched, { title: table.name, yLabel: 'Value', errorType: 'none', sig: cmp.sig }));
     }
 
     if (kind === 'kruskal') {
       const r = T.kruskalWallis(groups);
-      const ph = T.dunnPosthoc(r, spec.posthoc, { pairs: spec.pairs });
+      const cmp = rankComparisons(spec, groups, (method, opts) => T.dunnPosthoc(r, method, opts));
       const node = card('Kruskal-Wallis test',
         verdict(r.p, 'At least one group differs significantly (by ranks).', 'No significant differences among groups.'),
         statsTable([['Kruskal-Wallis H', num(r.H, 4)], ['df', r.df], ['P value', fmtP(r.p)], ['Tie correction', num(r.tieCorrection, 4)]]),
+        el('div', { class: 'note' }, r.method === 'exact' ? 'Exact P value (small samples; tied values included).' : 'Samples too large for an exact P value: chi-square approximation, corrected for ties.'),
         el('div', { class: 'section-label' }, 'Mean ranks'),
         statsTable(r.names.map((nm, i) => [nm, num(r.meanRanks[i], 2) + `  (n=${r.ns[i]})`])),
-        el('div', { class: 'section-label' }, "Dunn's post-hoc (" + posthocName(spec.posthoc) + ')'),
-        posthocTable(ph, spec.posthoc, true));
-      return wrap('Kruskal-Wallis', node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: sigFromPosthoc(ph, groups) }));
+        ...cmp.nodes);
+      return wrap('Kruskal-Wallis', node, graphSpec('dot', groups, { title: table.name, yLabel: 'Value', errorType: 'none', sig: cmp.sig }));
     }
 
     if (kind === 'pearson' || kind === 'spearman') {
@@ -1269,7 +1447,8 @@
       const node = card((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation',
         hypothesisVerdict(table, spec, alternative, r.p, `Significant ${kind === 'pearson' ? 'linear' : 'monotonic'} correlation (${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}).`, 'No significant correlation.'),
         statsTable([[kind === 'pearson' ? 'r' : 'ρ (rho)', num(coef, 4)], ...(kind === 'pearson' ? [['95% CI for r', `${num(r.ci95lo, 3)} – ${num(r.ci95hi, 3)}`], ['R²', num(r.r2, 4)]] : []), ['n', r.n], [pLabel, fmtP(r.p)]]),
-        apaLine(`${kind === 'pearson' ? 'r' : 'rₛ'}(${r.n - 2}) = ${num(coef, 2)}, ${reportP(r.p)}.`));
+        apaLine(`${kind === 'pearson' ? 'r' : 'rₛ'}(${r.n - 2}) = ${num(coef, 2)}, ${reportP(r.p)}.`),
+        kind === 'spearman' ? el('div', { class: 'note' }, r.method === 'exact' ? 'Exact p-value (17 or fewer pairs).' : 'More than 17 pairs: p-value from the t approximation.') : null);
       const reg = T.linearRegression(xr, yr);
       return wrap((kind === 'pearson' ? 'Pearson' : 'Spearman') + ' correlation', node, xySpec(table, reg, `${kind === 'pearson' ? 'r' : 'ρ'} = ${num(coef, 3)}, ${pText(r.p)} (${tailName(alternative)})`));
     }
@@ -1355,7 +1534,7 @@
 
     if (kind === 'twoway') {
       const cm = table.cellsMatrix();
-      const m = T.twoWayANOVA(cm.cells, cm.rowNames, cm.colNames, { rowFactor: spec.rowFactor, colFactor: spec.colFactor });
+      const m = T.twoWayANOVA(cm.cells, cm.rowNames, cm.colNames, { rowFactor: spec.rowFactor, colFactor: spec.colFactor, interaction: spec.interaction });
       if (m.error) {
         const node = card('Two-way ANOVA', el('div', { class: 'verdict warn' }, el('span', { class: 'vicon' }, '⚠'), el('span', {}, m.error)));
         return wrap('Two-way ANOVA', node, null);
@@ -1375,7 +1554,10 @@
       const cb = el('tbody');
       cm.rowNames.forEach((rn, i) => cb.append(el('tr', {}, el('td', {}, rn), ...cm.colNames.map((_, j) => el('td', { class: 'num' }, m.cellN[i][j] ? num(m.cellMeans[i][j]) + ' ±' + num(m.cellSD[i][j], 2) + ' (n=' + m.cellN[i][j] + ')' : '—')))));
       cmeans.append(cb);
-      const ph = T.twoWayPosthoc(m, spec.phmethod, spec.phdir);
+      const ph = T.twoWayPosthoc(m, spec.phmethod, spec.phdir, { control: spec.phcontrol, families: twoWayFamily(spec) });
+      const controlName = spec.phmethod === 'dunnett' ? twoWayControlLevels(table, ph.direction)[ph.control] : null;
+      const familyUnit = ph.direction === 'colsWithinRow' ? spec.rowFactor : spec.colFactor;
+      const familyText = ph.families === 'each' ? '; one family per ' + familyUnit : ph.families === 'all' ? '; one family for all comparisons' : '';
       const dirTextMap = {
         colsWithinRow: spec.colFactor + ' within each ' + spec.rowFactor,
         rowsWithinCol: spec.rowFactor + ' within each ' + spec.colFactor,
@@ -1383,12 +1565,20 @@
         rowMeans: spec.rowFactor + ' means (main effect, averaged over ' + spec.colFactor + ')',
         cells: 'every cell mean vs every other cell',
       };
-      const dirText = dirTextMap[spec.phdir] || dirTextMap.colsWithinRow;
+      const dirText = dirTextMap[ph.direction] || dirTextMap.colsWithinRow;
       const node = card('Two-way ANOVA', vnode, at,
-        m.interaction ? null : el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Only one value per cell — the interaction cannot be estimated, so this fits an additive model (assumes no interaction).'),
+        m.interaction ? null : m.replicated
+          ? el('div', { class: 'note' }, 'Main effects only: the interaction term was left out of the model, as chosen.')
+          : el('div', { class: 'note', style: 'color:var(--warn)' }, '⚠ Only one value per cell — the interaction cannot be estimated, so this fits an additive model (assumes no interaction).'),
         el('div', { class: 'section-label' }, 'Cell means (mean ± SD)'), cmeans,
-        el('div', { class: 'section-label' }, 'Multiple comparisons: ' + dirText + ' (' + posthocName(spec.phmethod) + ')'),
+        el('div', { class: 'section-label' }, 'Multiple comparisons: ' + dirText + ' (' + (controlName ? 'Dunnett vs ' + controlName : posthocName(spec.phmethod)) + familyText + ')'),
         twoWayPosthocTable(ph),
+        m.interaction ? null : el('div', { class: 'note' }, (ph.requestedDirection !== ph.direction ? 'Comparisons within a row or column need an interaction term, and this model has none, so the matching main effect is compared instead. ' : '')
+          + 'These comparisons use the model’s estimated marginal means: each level’s predicted mean, averaged evenly over the other factor.'),
+        ph.approximate ? el('div', { class: 'note' }, 'Dunnett P values here are approximate (about three decimal places): with unequal cell sizes the correlations between comparisons are fitted with a one-factor structure (Hsu, 1992).') : null,
+        ph.families === 'each' && ph.comparisons.length && ph.comparisons.length === ph.familyCount && spec.phmethod !== 'lsd'
+          ? el('div', { class: 'note' }, 'Each family holds a single comparison, so there is nothing to correct: adjusted and individual P values are the same.') : null,
+        METHOD_HINTS[spec.phmethod] ? el('div', { class: 'note' }, METHOD_HINTS[spec.phmethod]) : null,
         residualNormalityNote(cm.cells));
       const sigInfo = phSigForGrouped(ph);
       const gspec = { chartType: 'grouped', cells: cm.cells, rowNames: cm.rowNames, colNames: cm.colNames, opts: { title: table.name, yLabel: 'Value', errorType: 'sem', sig: sigInfo.sig, sigNote: sigInfo.note } };
@@ -1433,22 +1623,103 @@
   }
   function assumptionNoteMulti(groups) { return assumptionNote(...groups.map((g) => g.values)); }
 
-  function posthocName(m) { return { tukey: 'Tukey HSD', dunnett: "Dunnett (vs control)", bonferroni: 'Bonferroni', sidak: 'Šídák', 'holm-sidak': 'Holm-Šídák', custom: 'Selected comparisons' }[m] || m; }
+  function posthocName(m) {
+    return {
+      tukey: 'Tukey HSD', dunnett: "Dunnett (vs control)", bonferroni: 'Bonferroni', sidak: 'Šídák', 'holm-sidak': 'Holm-Šídák', custom: 'Selected comparisons',
+      snk: 'Newman-Keuls', lsd: 'Fisher’s LSD', 'fdr-bh': 'FDR, Benjamini-Hochberg', 'fdr-bky': 'FDR, two-stage Benjamini-Krieger-Yekutieli', 'fdr-by': 'FDR, Benjamini-Yekutieli',
+      'games-howell': 'Games-Howell', 'tamhane-t2': 'Tamhane T2', 'dunnett-t3': 'Dunnett T3', trend: 'linear trend', off: 'no multiple comparisons', none: 'uncorrected',
+    }[m] || m;
+  }
+  const dunnName = (m) => (m === 'off' ? 'no multiple comparisons' : posthocName(m));
+  // Heading of the P column: adjusted, uncorrected, or an FDR q value.
+  function pHeading(method) {
+    if (/^fdr-/.test(method)) return 'q (FDR)';
+    if (method === 'lsd' || method === 'none') return 'P (uncorrected)';
+    return method === 'tukey' || method === 'dunnett' ? 'P' : 'P (adj)';
+  }
+  // Columns follow what the method provides: simultaneous 95% intervals where they
+  // exist, q for studentized-range methods, and df when it differs between pairs.
   function posthocTable(ph, method, isDunn) {
-    const t = el('table', { class: 'stats' });
-    const cols = method === 'tukey' ? ['Comparison', 'Mean diff', '95% CI', 'q', 'P', ''] : isDunn ? ['Comparison', 'z', 'P (adj)', ''] : method === 'dunnett' ? ['Comparison', 'Mean diff', 't', 'P', ''] : ['Comparison', 'Mean diff', 'P (adj)', ''];
+    const rows = ph.comparisons;
+    const hasCI = !isDunn && rows.length > 0 && rows.every((c) => Number.isFinite(c.ci95lo) && Number.isFinite(c.ci95hi));
+    const useQ = !isDunn && rows.some((c) => c.q !== undefined);
+    const hasDf = !isDunn && rows.some((c) => c.df !== rows[0].df);
+    const cols = ['Comparison'].concat(isDunn ? ['z'] : ['Mean diff'].concat(hasCI ? ['95% CI'] : [], [useQ ? 'q' : 't'], hasDf ? ['df'] : []), [pHeading(method), '']);
+    const t = el('table', { class: 'stats posthoc' });
     t.append(el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))));
     const tb = el('tbody');
-    ph.comparisons.forEach((c) => {
+    if (!rows.length) tb.append(el('tr', {}, el('td', { colspan: cols.length, class: 'muted' }, 'No comparisons selected.')));
+    rows.forEach((c) => {
       const cells = [el('td', {}, `${c.a} vs ${c.b}`)];
-      if (method === 'tukey') { cells.push(el('td', { class: 'num' }, num(c.diff)), el('td', { class: 'num' }, `${num(c.ci95lo, 3)} – ${num(c.ci95hi, 3)}`), el('td', { class: 'num' }, num(c.q, 3)), el('td', { class: 'num' }, fmtP(c.p))); }
-      else if (isDunn) { cells.push(el('td', { class: 'num' }, num(c.z, 3)), el('td', { class: 'num' }, fmtP(c.p))); }
-      else if (method === 'dunnett') { cells.push(el('td', { class: 'num' }, num(c.diff)), el('td', { class: 'num' }, num(c.t, 3)), el('td', { class: 'num' }, fmtP(c.p))); }
-      else { cells.push(el('td', { class: 'num' }, num(c.diff)), el('td', { class: 'num' }, fmtP(c.p))); }
-      cells.push(el('td', { class: 'num sig-star' }, c.sig ? stars(c.p) : 'ns'));
+      if (isDunn) cells.push(el('td', { class: 'num' }, num(c.z, 3)));
+      else {
+        cells.push(el('td', { class: 'num' }, num(c.diff)));
+        if (hasCI) cells.push(el('td', { class: 'num' }, `${num(c.ci95lo, 3)} – ${num(c.ci95hi, 3)}`));
+        cells.push(el('td', { class: 'num' }, useQ ? num(c.q, 3) : num(c.t, 3)));
+        if (hasDf) cells.push(el('td', { class: 'num' }, num(c.df, 2)));
+      }
+      cells.push(el('td', { class: 'num' }, fmtP(c.p)), el('td', { class: 'num sig-star' }, c.sig ? stars(c.p) : 'ns'));
       tb.append(el('tr', {}, ...cells));
     });
     t.append(tb); return t;
+  }
+  // The comparison section of a means analysis (one-way or repeated-measures ANOVA):
+  // its result nodes and the brackets offered to the graph. `anova` enables the trend test.
+  function meanComparisons(spec, groups, run, anova) {
+    const mode = spec.posthoc;
+    if (mode === 'off') return { nodes: [], sig: [] };
+    if (mode === 'trend' && anova) {
+      const tr = T.linearTrend(anova);
+      return {
+        sig: [], nodes: [
+          el('div', { class: 'section-label' }, 'Test for linear trend (left-to-right column order)'),
+          statsTable([['Slope (change per column)', num(tr.slope)], ['R²', num(tr.r2, 4)],
+            ['Linear trend', `F(1, ${tr.df2}) = ${num(tr.F, 4)}, ${pText(tr.p)}`],
+            ['Departure from a straight line', tr.nonlinear.df > 0 ? `F(${tr.nonlinear.df}, ${tr.df2}) = ${num(tr.nonlinear.F, 4)}, ${pText(tr.nonlinear.p)}` : '—']]),
+          el('div', { class: 'note' }, (tr.p < 0.05 ? 'The means change steadily across the column order.' : 'No significant linear trend across the column order.')
+            + (tr.nonlinear.p < 0.05 ? ' The means also depart from a straight line, so a linear trend does not describe them fully.' : '')),
+        ],
+      };
+    }
+    const control = groups[spec.control || 0];
+    if ((mode === 'dunnett' || spec.family === 'control') && !control) throw new Error('the control group of this analysis has no data.');
+    const ph = run(mode, { control: spec.control, pairs: spec.pairs, correction: spec.correction, family: spec.family });
+    const method = mode === 'custom' ? (spec.correction || 'sidak') : (mode || 'tukey');
+    const label = mode === 'dunnett' ? 'Dunnett vs ' + control.name
+      : mode === 'custom' ? 'Selected comparisons (' + posthocName(method) + ')'
+        : spec.family === 'control' ? 'each vs ' + control.name + ' (' + posthocName(method) + ')' : posthocName(method);
+    return {
+      ph, sig: sigFromPosthoc(ph, groups), nodes: [
+        el('div', { class: 'section-label' }, 'Post-hoc: ' + label),
+        posthocTable(ph, method),
+        METHOD_HINTS[method] ? el('div', { class: 'note' }, METHOD_HINTS[method]) : null,
+      ],
+    };
+  }
+  // The Dunn section of a rank analysis (Kruskal-Wallis or Friedman).
+  function rankComparisons(spec, groups, run) {
+    const method = spec.posthoc || 'holm-sidak';
+    if (method === 'off') return { nodes: [], sig: [] };
+    const control = groups[spec.control || 0];
+    if (spec.family === 'control' && !control) throw new Error('the control group of this analysis has no data.');
+    const ph = run(spec.posthoc, { pairs: spec.pairs, family: spec.family, control: spec.control });
+    const family = (Array.isArray(spec.pairs) && spec.pairs.length) ? 'selected pairs, ' : spec.family === 'control' ? 'each vs ' + control.name + ', ' : '';
+    return {
+      ph, sig: sigFromPosthoc(ph, groups), nodes: [
+        el('div', { class: 'section-label' }, "Dunn's post-hoc (" + family + dunnName(method) + ')'),
+        posthocTable(ph, method, true),
+        METHOD_HINTS[method] ? el('div', { class: 'note' }, METHOD_HINTS[method]) : null,
+      ],
+    };
+  }
+  // Brown–Forsythe and Bartlett tests of equal variances, shown with one-way ANOVA.
+  function equalVarianceTests(groups) {
+    const bf = T.brownForsythe(groups), bt = T.bartlett(groups);
+    const line = (r, stat) => r.error ? 'unavailable — ' + r.error : stat + ', ' + pText(r.p);
+    return el('div', {},
+      el('div', { class: 'section-label' }, 'Equal-variance tests'),
+      statsTable([['Brown–Forsythe', line(bf, `W(${bf.df1}, ${bf.df2}) = ${num(bf.W, 4)}`)], ['Bartlett', line(bt, `χ²(${bt.df}) = ${num(bt.T, 4)}`)]]),
+      el('div', { class: 'note' }, 'A small P value is evidence of unequal SDs; a large one does not prove them equal. Bartlett’s test is sensitive to non-normal data.'));
   }
   // Every post-hoc comparison becomes a candidate bracket. Significant ones are shown
   // by default (capped so a busy figure isn't flooded); the rest ride along with on:false
@@ -1457,14 +1728,14 @@
     const idx = {}; groups.forEach((g, i) => { idx[g.name] = i; });
     let shown = 0;
     return ph.comparisons
-      .map((c) => ({ i: idx[c.a], j: idx[c.b], name: `${c.a} vs ${c.b}`, label: stars(c.p), p: c.p, sig: !!c.sig }))
+      .map((c) => ({ i: idx[c.a], j: idx[c.b], name: `${c.a} vs ${c.b}`, label: c.sig ? stars(c.p) : 'ns', p: c.p, sig: !!c.sig }))
       .filter((s) => s.i != null && s.j != null)
       .map((s) => { const on = s.sig && shown < 6; if (on) shown++; return Object.assign(s, { on }); });
   }
   function twoWayPosthocTable(ph) {
     const t = el('table', { class: 'stats' });
     const hasWithin = ph.direction === 'colsWithinRow' || ph.direction === 'rowsWithinCol';
-    const statCol = ph.method === 'tukey' ? 'q' : 't', pCol = ph.method === 'tukey' ? 'P' : 'P (adj)';
+    const statCol = ph.method === 'tukey' ? 'q' : 't', pCol = pHeading(ph.method);
     const cols = (hasWithin ? ['Within'] : []).concat(['Comparison', 'Mean diff', statCol, pCol, '']);
     t.append(el('thead', {}, el('tr', {}, ...cols.map((h) => el('th', {}, h)))));
     const tb = el('tbody');
