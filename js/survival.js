@@ -78,14 +78,16 @@ const Survival = (function (C) {
       const dj = groups.map((name) => eventsAt(byGroup[name], t));
       const nTot = nj.reduce((s, v) => s + v, 0);
       const dTot = dj.reduce((s, v) => s + v, 0);
-      if (nTot <= 1) continue;
+      if (nTot < 1) continue;
       const w = useGehan ? nTot : 1; // Gehan-Breslow weights by n at risk
       for (let j = 0; j < g; j++) {
         const eij = dTot * nj[j] / nTot;
         O[j] += w * dj[j];
         E[j] += w * eij;
       }
-      // covariance (hypergeometric) — multiply by w^2
+      // covariance (hypergeometric) — multiply by w^2. A lone subject at risk still
+      // counts toward observed and expected events but adds no variance.
+      if (nTot <= 1) continue;
       const factor = (dTot * (nTot - dTot)) / (nTot * nTot * (nTot - 1));
       for (let j = 0; j < g; j++) {
         for (let l = 0; l < g; l++) {

@@ -118,15 +118,40 @@ graph titles and axis labels, notes, dialogs — accepts special symbols
 ### Statistical tests
 - **t tests** — one-sample, unpaired (Student's, equal variance), unpaired with
   **Welch's correction** (unequal variance), and paired.
-- **ANOVA** — one-way, plus **Welch's ANOVA** for unequal variances, with post-hoc
-  comparisons: **Tukey HSD**, **Dunnett** (vs any control), **Holm-Šídák**,
-  **Bonferroni**, **Šídák**, or **choose specific comparisons** to run.
-- **Two-way ANOVA** (Grouped tables) — two factors and their **interaction**, with
-  **Type III sums of squares** (correct for unbalanced designs), partial η² effect
-  sizes, cell means, and multiple comparisons within rows or columns.
-- **Non-parametric** — **Mann-Whitney U** (exact for small samples, tie-corrected
-  normal approximation otherwise), **Wilcoxon** matched-pairs signed rank,
-  **Kruskal-Wallis** with **Dunn's** post-hoc, and **Scheirer-Ray-Hare**
+- **ANOVA** — one-way, with **Welch's** and **Brown–Forsythe ANOVA** for unequal
+  variances and **Brown–Forsythe** and **Bartlett** equal-variance tests reported
+  alongside.
+- **Repeated-measures one-way ANOVA** — one subject per row, with the
+  **Geisser-Greenhouse** correction (or sphericity assumed) and a test of whether the
+  matching was effective; **Friedman test** as its rank-based counterpart. When a row
+  has a missing value, a **mixed-effects model** is fitted instead and uses every
+  value (or choose ANOVA always, which leaves incomplete rows out, or the model always).
+- **Multiple comparisons** — choose what to compare (**every pair**, **each vs. a
+  control**, **selected pairs**, a **test for linear trend**, or none) and how:
+  **Tukey**, **Dunnett** (exact for unequal group sizes), **Holm-Šídák**,
+  **Bonferroni**, **Šídák**, **Newman-Keuls**, **Fisher's LSD**, false discovery rate
+  (**Benjamini-Hochberg**, **two-stage Benjamini-Krieger-Yekutieli**,
+  **Benjamini-Yekutieli**), and for unequal variances **Games-Howell**,
+  **Tamhane T2** and **Dunnett T3**. Simultaneous 95% confidence intervals are shown
+  where the method defines them.
+- **Two-way ANOVA** (Grouped tables) — two factors and their **interaction** (or
+  **main effects only**), with **Type III sums of squares** (correct for unbalanced
+  designs), partial η² effect sizes, cell means, and multiple comparisons within rows
+  or columns, of row or column means, or between cells: Šídák, Tukey, Holm-Šídák,
+  Bonferroni, **Dunnett** vs a control, Fisher's LSD or false discovery rate.
+  Comparisons within rows or columns use **one family per row** (or column group) by
+  default, or one family for the whole table. A model without an interaction compares
+  main effects only, from **estimated marginal means**.
+- **Repeated-measures two-way ANOVA and mixed-effects model** — in the Two-way ANOVA
+  options, say whether the same subject was measured in every row, in every column
+  group, or both; a preview colours your table by subject before you run. Complete
+  data run as repeated-measures ANOVA with the **Geisser-Greenhouse** correction (or
+  sphericity assumed); with missing values a mixed-effects model (REML, random
+  subjects, **Kenward-Roger** degrees of freedom) uses every value.
+- **Non-parametric** — **Mann-Whitney U** and **Wilcoxon** matched-pairs signed rank
+  with exact p-values, ties included (normal approximation for large samples),
+  **Kruskal-Wallis** and **Friedman** with **Dunn's** post-hoc (every pair, each vs. a
+  control or selected pairs; corrected, uncorrected or FDR), and **Scheirer-Ray-Hare**
   (non-parametric two-way). Every parametric test has a rank-based counterpart.
 - **Correlation & regression** — Pearson, Spearman, and simple linear regression
   with confidence bands.
@@ -258,6 +283,13 @@ The statistics engine is verified against authoritative references — see
 
 - Studentized-range (Tukey) critical values vs published tables.
 - Dunnett critical values vs Monte-Carlo simulation and canonical tables.
+- ANOVA variants and multiple-comparison methods vs released R packages (car, emmeans,
+  multcomp, mvtnorm, onewaytests, PMCMRplus; `tests/anova-reference.R`, frozen in
+  `tests/anova-reference-r.json`), with SciPy and a second numerical formulation as a
+  further check (`tests/anova-oracle.py`, `tests/anova-reference.json`).
+- Repeated-measures two-way ANOVA and the mixed-effects model vs car, lme4, lmerTest,
+  pbkrtest and emmeans (`tests/rm-mixed-reference.R`, frozen in
+  `tests/rm-mixed-reference.json`; data in `tests/rm-mixed-fixtures.json`).
 - Shapiro-Wilk coefficients vs Shapiro & Wilk (1965) Table 5.
 - Grubbs' G vs the NIST example.
 - Kaplan-Meier medians and log-rank χ² = 16.79 vs the Freireich leukemia dataset.
@@ -307,10 +339,22 @@ The renderer (`index.html` + `js/`) is identical in the desktop and web versions
 the Electron shell only adds the native window, menu, and file dialogs.
 
 ## Notes & limits
-- p-values use exact algorithms where practical (e.g. Mann-Whitney for small n) and
-  well-established approximations otherwise; each result states the method used.
-- Two-way ANOVA is included (Grouped tables). Repeated-measures/mixed-effects ANOVA
-  and Cox regression are not; the guide flags when a repeated-measures design would be
-  more appropriate.
+- p-values use exact algorithms where practical and well-established approximations
+  otherwise; each result states the method used. Exact: Wilcoxon signed rank up to 200
+  pairs, Spearman up to 17 pairs, Mann-Whitney while the smaller group
+  has at most 100 values (untied data: up to 40,000 for the product of the group sizes),
+  Friedman while (columns!)^rows is at most 10⁹, and Kruskal-Wallis for small samples
+  (no group above 35 values and a table small enough to enumerate: about 15 per group
+  with three groups, 5 per group with four).
+- Repeated-measures ANOVA needs every subject complete; subjects with a missing value
+  are left out and named. The mixed-effects model uses every value, assumes sphericity
+  (no Geisser-Greenhouse correction) and always fits the interaction; it needs at least
+  one value in every combination of the two factors. Its degrees of freedom are
+  Kenward-Roger only. Which subcolumn is which subject: rows repeated, one subject per
+  subcolumn of a column group; column groups repeated, the same subcolumn number within
+  a row; both, the subcolumn number. Three-way ANOVA, nested designs and Cox regression
+  are not included.
+- Larger Kruskal-Wallis and Friedman tables use the tie-corrected chi-square
+  approximation. Multiple comparisons use α = 0.05 (Q = 5% for FDR).
 - This tool supports analysis and figure-making; always sanity-check results
   against your experimental design.

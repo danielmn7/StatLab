@@ -154,7 +154,6 @@ const analyticCases = [
   { name: 'Welch', run: (alt, sign) => T.unpairedT([0, 2 * sign], [0, 0], true, alt), t: 1, df: 1, upper: 0.25 },
   { name: 'paired', run: (alt, sign) => T.pairedT([5, 5 + 2 * sign], [5, 5], alt), t: 1, df: 1, upper: 0.25 },
   { name: 'Pearson', run: (alt, sign) => T.pearson([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3 },
-  { name: 'Spearman', run: (alt, sign) => T.spearman([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3 },
   { name: 'regression', run: (alt, sign) => T.linearRegression([-1, 0, 1], [-sign, sign, 0], alt), t: 1 / Math.sqrt(3), df: 1, upper: 1 / 3, pKey: 'pSlope', tKey: 'tSlope' },
 ];
 for (const example of analyticCases) {
@@ -180,10 +179,10 @@ const compatibilityCases = [
   { name: 'pooled', run: (alt) => T.unpairedT(A, B, false, alt), p: 0.004681604753164139 },
   { name: 'Welch', run: (alt) => T.unpairedT(A, B, true, alt), p: 0.0048922803745057595 },
   { name: 'paired', run: (alt) => T.pairedT(P1, P2, alt), p: 0.000057153950148406574 },
-  { name: 'MW', run: (alt) => T.mannWhitney(A, B, alt), p: 0.008734437585388832, rank: true },
-  { name: 'Wilcoxon', run: (alt) => T.wilcoxonSignedRank(P1, P2, alt), p: 0.013676686898827173, rank: true },
+  { name: 'MW', run: (alt) => T.mannWhitney(A, B, alt), p: 2 / 429, rank: true }, // one tie: exact (exactRankTests, coin),
+  { name: 'Wilcoxon', run: (alt) => T.wilcoxonSignedRank(P1, P2, alt), p: 0.0078125, rank: true },
   { name: 'Pearson', run: (alt) => T.pearson(X, Y, alt), p: 4.888933612558003e-10 },
-  { name: 'Spearman', run: (alt) => T.spearman(X, Y, alt), p: 0 },
+  { name: 'Spearman', run: (alt) => T.spearman(X, Y, alt), p: 2 / 40320 },
   { name: 'regression', run: (alt) => T.linearRegression(X, Y, alt), p: 4.888933612555067e-10, pKey: 'pSlope' },
 ];
 function invariantFields(result, example) {
@@ -262,14 +261,15 @@ for (const [n, expected] of [[50, 9.911653021418339e-30], [100, 1.10438034659975
 // Iteration order must not change a large unbalanced exact distribution.
 chkSame('MW large unequal count order', Array.from(T.mannWhitneyCounts(100, 399)), Array.from(T.mannWhitneyCounts(399, 100)));
 
-// Normal rank tails: independent math.erfc constants, with directional
-// continuity corrections (delta+.5 for less, delta-.5 for greater).
+// Tied small samples: exact p-values (R exactRankTests 0.8 wilcox.exact and coin 1.4,
+// which agree). z keeps the directional continuity corrections (delta+.5 for less,
+// delta-.5 for greater).
 const tiedRankCases = [
   { name: 'MW ties', a: [1, 2], b: [2, 3], run: T.mannWhitney, delta: -1.5, variance: 1.5,
-    lower: 0.20710808912126252, upper: 0.9487647825701253, method: 'normal approximation (tie-corrected)' },
+    lower: 1 / 3, upper: 1, method: 'exact (ties)' },
   // Differences [-1,2,-2,-3,0]: drop the zero, use average tied ranks.
   { name: 'Wilcoxon ties/zero', a: [9, 12, 8, 7, 10], b: [10, 10, 10, 10, 10], run: T.wilcoxonSignedRank, delta: -2.5, variance: 7.375,
-    lower: 0.2307254939166804, upper: 0.8653529316401316, method: 'normal approximation' },
+    lower: 0.25, upper: 0.875, method: 'exact' },
 ];
 for (const example of tiedRankCases) {
   for (const swap of [false, true]) {
@@ -291,8 +291,8 @@ chkSame('Wilcoxon zero excluded/ranks', [T.wilcoxonSignedRank(tiedRankCases[1].a
   T.wilcoxonSignedRank(tiedRankCases[1].a, tiedRankCases[1].b).Wpos], [4, 2.5]);
 
 const centralRankCases = [
-  { name: 'MW tied central', run: (alt) => T.mannWhitney([1, 2], [1, 2], alt), tail: 0.6674972289489854 },
-  { name: 'Wilcoxon tied central', run: (alt) => T.wilcoxonSignedRank([1, 1, -2], [0, 0, 0], alt), tail: 0.6072526264408229 },
+  { name: 'MW tied central', run: (alt) => T.mannWhitney([1, 2], [1, 2], alt), tail: 5 / 6 },
+  { name: 'Wilcoxon tied central', run: (alt) => T.wilcoxonSignedRank([1, 1, -2], [0, 0, 0], alt), tail: 0.625 },
 ];
 for (const example of centralRankCases) {
   for (const alternative of alternatives) {
@@ -301,8 +301,8 @@ for (const example of centralRankCases) {
   chkSame(`${example.name} two-sided z`, example.run().z, 0);
 }
 for (const [name, run, upper] of [
-  ['MW near central', (alt) => T.mannWhitney([1, 3], [2, 3], alt), 0.7928919108787374],
-  ['Wilcoxon near central', (alt) => T.wilcoxonSignedRank([1, -2], [0, 0], alt), 0.8144533152386512],
+  ['MW near central', (alt) => T.mannWhitney([1, 3], [2, 3], alt), 5 / 6],
+  ['Wilcoxon near central', (alt) => T.wilcoxonSignedRank([1, -2], [0, 0], alt), 0.75],
 ]) {
   chkP(`${name} less`, run('less').p, 0.5);
   chkP(`${name} greater`, run('greater').p, upper);
@@ -327,11 +327,13 @@ for (const alternative of alternatives) {
   chkP(`MW large central ${alternative}`, T.mannWhitney(evenRanks, oddRanks, alternative).p,
     alternative === 'two-sided' ? 1 : 0.5001706107075066);
 }
-const positiveDiffs = Array.from({ length: 100 }, (_, i) => i + 1), zeroReference = positiveDiffs.map(() => 0);
-chkP('Wilcoxon large upper', T.wilcoxonSignedRank(positiveDiffs, zeroReference, 'greater').p, 1.9779558044497787e-18);
-chkP('Wilcoxon large lower', T.wilcoxonSignedRank(zeroReference, positiveDiffs, 'less').p, 1.9779558044497787e-18);
+// 201 pairs is the first size that uses the normal approximation
+// (R wilcox.test(paired = TRUE, exact = FALSE, correct = TRUE)).
+const positiveDiffs = Array.from({ length: 201 }, (_, i) => i + 1), zeroReference = positiveDiffs.map(() => 0);
+chkP('Wilcoxon large upper', T.wilcoxonSignedRank(positiveDiffs, zeroReference, 'greater').p, 4.9601500441568623e-35);
+chkP('Wilcoxon large lower', T.wilcoxonSignedRank(zeroReference, positiveDiffs, 'less').p, 4.9601500441568623e-35);
 chkP('Wilcoxon large opposite', T.wilcoxonSignedRank(positiveDiffs, zeroReference, 'less').p, 1);
-chkP('Wilcoxon large two-sided', T.wilcoxonSignedRank(positiveDiffs, zeroReference).p, 2 * 1.9779558044497787e-18);
+chkP('Wilcoxon large two-sided', T.wilcoxonSignedRank(positiveDiffs, zeroReference).p, 2 * 4.9601500441568623e-35);
 
 // t=0/r=0/slope=0: one-sided p=.5, two-sided p=1 for all t-based APIs.
 const zeroCases = [
@@ -340,7 +342,6 @@ const zeroCases = [
   ['Welch', (alt) => T.unpairedT([-1, 1], [-1, 1], true, alt)],
   ['paired', (alt) => T.pairedT([-1, 1], [0, 0], alt)],
   ['Pearson', (alt) => T.pearson([-1, 0, 1], [1, -2, 1], alt)],
-  ['Spearman', (alt) => T.spearman([1, 2, 3, 4], [2, 4, 1, 3], alt)],
   ['regression', (alt) => T.linearRegression([-1, 0, 1], [1, -2, 1], alt), 'pSlope'],
 ];
 for (const [name, run, pKey = 'p'] of zeroCases) {
@@ -377,7 +378,6 @@ const boundaryCases = [
   ['pooled', (alt, sign) => T.unpairedT([sign, sign], [0, 0], false, alt)],
   ['paired', (alt, sign) => T.pairedT([sign, sign], [0, 0], alt)],
   ['Pearson', (alt, sign) => T.pearson([-1, 0, 1], [-sign, 0, sign], alt)],
-  ['Spearman', (alt, sign) => T.spearman([-1, 0, 1], [-sign, 0, sign], alt)],
   ['regression', (alt, sign) => T.linearRegression([-1, 0, 1], [-sign, 0, sign], alt), 'pSlope'],
 ];
 for (const [name, run, pKey = 'p'] of boundaryCases) {
@@ -397,6 +397,33 @@ for (const { name, run } of compatibilityCases.concat([{ name: 'Student-t helper
     try { run(alternative); return false; } catch (error) { return error instanceof RangeError; }
   });
   chkSame(`${name} rejects invalid alternatives`, rejected, true);
+}
+
+// Spearman with 17 or fewer pairs: exact p-values over all pairings
+// (R cor.test(method = "spearman", exact = TRUE) and pspearman 0.3, which agree).
+for (const [name, x, y, greater, less, two] of [
+  ['Spearman half', [-1, 0, 1], [-1, 1, 0], 0.5, 5 / 6, 1],
+  ['Spearman zero', [1, 2, 3, 4], [2, 4, 1, 3], 13 / 24, 13 / 24, 1],
+  ['Spearman perfect', [-1, 0, 1], [-1, 0, 1], 1 / 6, 1, 1 / 3],
+  ['Spearman inverse', [-1, 0, 1], [1, 0, -1], 1, 1 / 6, 1 / 3],
+]) {
+  chkP(`${name} greater`, T.spearman(x, y, 'greater').p, greater);
+  chkP(`${name} less`, T.spearman(x, y, 'less').p, less);
+  chkP(`${name} two-sided`, T.spearman(x, y).p, two);
+  chkSame(`${name} method`, T.spearman(x, y).method, 'exact');
+}
+
+// Log-rank observed/expected counts, including an event that happens when one subject
+// is left at risk. Reference: R survival 3.8 survdiff(Surv(time, event) ~ group).
+{
+  const S = require('../js/survival.js');
+  const rows = [[1, 1, 'A'], [2, 1, 'A'], [9, 1, 'A'], [3, 1, 'B'], [4, 1, 'B'], [5, 0, 'B']].map(([time, event, group]) => ({ time, event, group }));
+  const lr = S.logRank(rows);
+  chk('log-rank chi-square', lr.chi2, 0.29669651126891, 1e-12);
+  chk('log-rank observed A', lr.perGroup[0].O, 3, 1e-12);
+  chk('log-rank expected A', lr.perGroup[0].E, 2.48333333333333, 1e-12);
+  chk('log-rank observed B', lr.perGroup[1].O, 2, 1e-12);
+  chk('log-rank expected B', lr.perGroup[1].E, 2.51666666666667, 1e-12);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
