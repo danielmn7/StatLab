@@ -29,6 +29,21 @@ const shown = (x, d) => String(parseFloat(x.toFixed(d)));
 const close = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1e-12, Math.abs(b));
 // Field order is not part of a spec's meaning.
 const sameSpec = (a, b) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]])) === JSON.stringify(Object.keys(b).sort().map((k) => [k, b[k]]));
+const escapeUnsafeChars = (str) => str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => ({
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+}[ch]));
+const jsStringLiteral = (value) => escapeUnsafeChars(JSON.stringify(value));
 async function state() { return JSON.parse(await run('window.StatLab.getStateJSON()')); }
 async function load(json) { assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(json))})`)); }
 async function openAnalysis(name) {
@@ -49,7 +64,7 @@ async function choose(selector, value) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
   })()`);
 }
-const click = (selector) => run(`(() => { const n = document.querySelector(${JSON.stringify(selector)}); if (!n) throw new Error('No control ' + ${JSON.stringify(selector)}); n.click(); })()`);
+const click = (selector) => run(`(() => { const n = document.querySelector(${jsStringLiteral(selector)}); if (!n) throw new Error('No control ' + ${jsStringLiteral(selector)}); n.click(); })()`);
 const has = (selector) => run(`!!document.querySelector(${JSON.stringify(selector)})`);
 const textOf = (selector) => run(`(document.querySelector(${JSON.stringify(selector)}) || { textContent: null }).textContent`);
 const options = (selector) => run(`Array.from(document.querySelectorAll(${JSON.stringify(selector + ' option')})).map((o) => o.value)`);
