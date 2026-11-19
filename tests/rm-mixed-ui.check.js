@@ -27,9 +27,7 @@ function ok(name, condition) {
 // A number as the result cards print it: fixed decimals, trailing zeros dropped.
 const shown = (x, d) => String(parseFloat(x.toFixed(d)));
 const close = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1e-12, Math.abs(b));
-// Field order is not part of a spec's meaning.
-const sameSpec = (a, b) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]])) === JSON.stringify(Object.keys(b).sort().map((k) => [k, b[k]]));
-const escapeUnsafeChars = (str) => str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => ({
+const charMap = {
   '<': '\\u003C',
   '>': '\\u003E',
   '/': '\\u002F',
@@ -42,17 +40,39 @@ const escapeUnsafeChars = (str) => str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]
   '\0': '\\0',
   '\u2028': '\\u2028',
   '\u2029': '\\u2029'
-}[ch]));
-const jsStringLiteral = (value) => escapeUnsafeChars(JSON.stringify(value));
-async function state() { return JSON.parse(await run('window.StatLab.getStateJSON()')); }
-async function load(json) { assert.ok(await run(`window.StatLab.loadStateJSON(${JSON.stringify(JSON.stringify(json))})`)); }
+};
+function escapeUnsafeChars(str) {
+  return str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (x) => charMap[x]);
+}
+function toSafeJsString(value) {
+  return escapeUnsafeChars(JSON.stringify(String(value)));
+}
+// Field order is not part of a spec's meaning.
+const sameSpec = (a, b) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]])) === JSON.stringify(Object.keys(b).sort().map((k) => [k, b[k]]));
+const escapeUnsafeChars = (str) => str.replace(/[<>\/\\\b\f\n\r\t\0\u2028\u2029]/g, (ch) => ({
+async function load(json) { assert.ok(await run(`window.StatLab.loadStateJSON(${toSafeJsString(JSON.stringify(json))})`)); }
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+    const card = Array.from(document.querySelectorAll('.test-opt')).find((item) => item.querySelector('.t-name').textContent.startsWith(${toSafeJsString(name)}));
+    if (!card) throw new Error('Test option not found: ' + ${toSafeJsString(name)});
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+    const input = document.querySelector(${toSafeJsString(selector)});
+    if (!input) throw new Error('No control ' + ${toSafeJsString(selector)});
+    if (!Array.from(input.options).some((o) => o.value === ${toSafeJsString(value)})) throw new Error(${toSafeJsString(selector)} + ' has no option ' + ${toSafeJsString(value)});
+    input.value = ${toSafeJsString(value)};
 async function openAnalysis(name) {
   await run(`document.querySelector('#nav-tables .nav-item[data-view="data"]').click();
     Array.from(document.querySelectorAll('.view-actions button')).find((button) => button.textContent.includes('Analyze')).click()`);
-  await run(`(() => {
-    const card = Array.from(document.querySelectorAll('.test-opt')).find((item) => item.querySelector('.t-name').textContent.startsWith(${JSON.stringify(name)}));
-    if (!card) throw new Error('Test option not found: ' + ${JSON.stringify(name)});
-    card.click();
+const click = (selector) => run(`(() => { const n = document.querySelector(${toSafeJsString(selector)}); if (!n) throw new Error('No control ' + ${toSafeJsString(selector)}); n.click(); })()`);
+const has = (selector) => run(`!!document.querySelector(${toSafeJsString(selector)})`);
+const textOf = (selector) => run(`(document.querySelector(${toSafeJsString(selector)}) || { textContent: null }).textContent`);
+const options = (selector) => run(`Array.from(document.querySelectorAll(${toSafeJsString(selector + ' option')})).map((o) => o.value)`);
   })()`);
 }
 async function choose(selector, value) {
