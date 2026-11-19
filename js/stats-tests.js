@@ -451,20 +451,23 @@ const StatTests = (function (C) {
   // simultaneous intervals where the method defines them, and a significance flag.
   // ctx.k = number of means in the family (studentized range); ctx.means orders the
   // Newman–Keuls ranges; ctx.lambdas carries the Dunnett correlation structure.
+  // ctx.ownDf says each comparison may have its own df (the quick solver is then used
+  // for Tukey critical values); ctx.intervals === false skips the intervals.
   function finishComparisons(items, method, ctx) {
     const m = items.length, alpha = 0.05;
     const cache = new Map();
     const cached = (key, fn) => { if (!cache.has(key)) cache.set(key, fn()); return cache.get(key); };
-    const interval = (c, crit) => { c.ci95lo = c.diff - crit * c.se; c.ci95hi = c.diff + crit * c.se; };
+    const wantIntervals = ctx.intervals !== false;
+    const interval = (c, crit) => { if (!wantIntervals) return; crit = crit(); c.ci95lo = c.diff - crit * c.se; c.ci95hi = c.diff + crit * c.se; };
     items.forEach((c) => { c.t = c.diff / c.se; c.pRaw = C.studentTtwoTailP(c.t, c.df); });
     if (method === 'tukey' || method === 'games-howell') {
       // Tukey shares one df, so the historical bisection runs once; Games–Howell has a
       // df per pair and uses the quicker solver.
-      const qcrit = (df) => method === 'tukey' ? C.tukeyInv(1 - alpha, ctx.k, df) : criticalValue((q) => C.tukeyP(q, ctx.k, df), alpha);
+      const qcrit = (df) => method === 'tukey' && !ctx.ownDf ? C.tukeyInv(1 - alpha, ctx.k, df) : criticalValue((q) => C.tukeyP(q, ctx.k, df), alpha);
       items.forEach((c) => {
         c.q = Math.SQRT2 * Math.abs(c.t);
         c.p = C.tukeyP(c.q, ctx.k, c.df);
-        interval(c, cached(c.df, () => qcrit(c.df)) / Math.SQRT2);
+        interval(c, () => cached(c.df, () => qcrit(c.df)) / Math.SQRT2);
       });
     } else if (method === 'snk') {
       // Newman–Keuls: each pair is referred to the studentized range for the number
@@ -483,24 +486,24 @@ const StatTests = (function (C) {
     } else if (method === 'dunnett') {
       items.forEach((c) => {
         c.p = dunnettP(Math.abs(c.t), m, c.df, ctx.lambdas);
-        interval(c, cached(c.df, () => criticalValue((d) => dunnettP(d, m, c.df, ctx.lambdas), alpha)));
+        interval(c, () => cached(c.df, () => criticalValue((d) => dunnettP(d, m, c.df, ctx.lambdas), alpha)));
       });
     } else if (method === 'tamhane-t2') {
       items.forEach((c) => {
         c.p = 1 - Math.pow(1 - c.pRaw, m);
-        interval(c, C.studentTinv(1 - (1 - Math.pow(1 - alpha, 1 / m)) / 2, c.df));
+        interval(c, () => C.studentTinv(1 - (1 - Math.pow(1 - alpha, 1 / m)) / 2, c.df));
       });
     } else if (method === 'dunnett-t3') {
       items.forEach((c) => {
         c.p = smmP(Math.abs(c.t), m, c.df);
-        interval(c, cached(c.df, () => criticalValue((x) => smmP(x, m, c.df), alpha)));
+        interval(c, () => cached(c.df, () => criticalValue((x) => smmP(x, m, c.df), alpha)));
       });
     } else {
       const adj = adjustP(items.map((c) => c.pRaw), method);
       items.forEach((c, idx) => {
         c.p = adj[idx];
         const tail = method === 'bonferroni' ? alpha / m : method === 'sidak' ? 1 - Math.pow(1 - alpha, 1 / m) : (method === 'lsd' || method === 'none') ? alpha : null;
-        if (tail != null) interval(c, C.studentTinv(1 - tail / 2, c.df));
+        if (tail != null) interval(c, () => C.studentTinv(1 - tail / 2, c.df));
       });
     }
     items.forEach((c) => { c.sig = c.p < alpha; });
@@ -1553,6 +1556,8 @@ const StatTests = (function (C) {
     kruskalWallis, dunnPosthoc,
     pearson, spearman, linearRegression,
     twoWayANOVA, twoWayPosthoc, scheirerRayHare,
+    // Shared with stats-mixed.js, which builds its comparison families the same way.
+    _internal: { finishComparisons, comparisonFamily, labelComparisons, oneFactorLambdas, ADJUSTMENTS },
   };
 })(typeof StatCore !== 'undefined' ? StatCore : require('./stats-core.js'));
 

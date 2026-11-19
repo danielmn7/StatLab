@@ -58,6 +58,18 @@ const DataLib = (function () {
       return { rowNames, colNames: this.groupNames.slice(), cells };
     }
 
+    // The same rows as cellsMatrix(), keeping each value's subcolumn position
+    // (grid[i][j][s] = number or null), so a repeated-measures analysis can tell which
+    // values belong to one subject.
+    subcolumnGrid() {
+      const n = this.nsub, rowIdx = [];
+      const numeric = (v) => v !== '' && v != null && !Number.isNaN(Number(v));
+      this.rows.forEach((row, ri) => { if (row.some(numeric)) rowIdx.push(ri); });
+      const grid = rowIdx.map((ri) => this.groupNames.map((_, gi) => Array.from({ length: n }, (_, s) => { const v = this.rows[ri][gi * n + s]; return numeric(v) ? Number(v) : null; })));
+      const rowNames = rowIdx.map((ri) => (this.rowTitles[ri] && String(this.rowTitles[ri]).trim()) || ('Row ' + (ri + 1)));
+      return { rowNames, colNames: this.groupNames.slice(), nsub: n, grid };
+    }
+
     // ----- sample IDs (row titles) -----
     // Grouped sheets use rowTitles as their row factor instead, so they have no ID column.
     hasSampleIdColumn() { return this.type !== 'grouped'; }

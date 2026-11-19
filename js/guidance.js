@@ -122,7 +122,7 @@ const Guidance = (function () {
     rec_wilcoxon_paired: rec('Wilcoxon matched-pairs signed rank test', 'wilcoxon', {}, 'Rank-based alternative to the paired t test.'),
     rec_anova: rec('One-way ANOVA', 'anova', { posthoc: 'tukey' }, 'Compares means across 3+ independent groups, with post-hoc tests to see which pairs differ.'),
     rec_kruskal: rec('Kruskal-Wallis test', 'kruskal', { posthoc: 'holm-sidak' }, "Rank-based comparison of 3+ groups, with Dunn's post-hoc tests."),
-    rec_rm_anova: rec('Repeated-measures one-way ANOVA', 'rm-anova', { posthoc: 'tukey' }, 'Compares 3+ conditions measured on the same subjects. Matching removes between-subject variation; the Geisser-Greenhouse correction avoids assuming sphericity.'),
+    rec_rm_anova: rec('Repeated-measures one-way ANOVA', 'rm-anova', { posthoc: 'tukey', rmMethod: 'auto' }, 'Compares 3+ conditions measured on the same subjects. Matching removes between-subject variation; the Geisser-Greenhouse correction avoids assuming sphericity.'),
     rec_friedman: rec('Friedman test', 'friedman', { posthoc: 'holm-sidak' }, "Rank-based comparison of 3+ matched conditions, with Dunn's post-hoc tests."),
     rec_rm_note: rec('Repeated-measures design', 'anova', { posthoc: 'tukey', note: true }, 'For truly repeated/matched designs a repeated-measures ANOVA or Friedman test is ideal. This version runs an ordinary one-way ANOVA — interpret with care if subjects are matched.'),
     rec_pearson: rec('Pearson correlation', 'pearson', {}, 'Measures linear association between two continuous variables (r).'),
@@ -221,7 +221,7 @@ const Guidance = (function () {
       use: 'Compare three or more conditions measured on the same subjects (or matched sets), one subject per row.',
       assumptions: ['Each row is one subject measured in every column', 'Differences between conditions are approximately normal', 'Sphericity, unless the Geisser-Greenhouse correction is used (the default)'],
       interpret: 'A significant result says at least one condition mean differs. Epsilon (ε) near 1 means sphericity holds; smaller values mean a larger correction. The matching test shows whether pairing the measurements removed real between-subject variation.',
-      alt: 'Non-normal or ordinal? Friedman test. Independent groups? Ordinary one-way ANOVA. Rows with a missing value are left out; a mixed-effects model is not available.',
+      alt: 'Non-normal or ordinal? Friedman test. Independent groups? Ordinary one-way ANOVA. A row with a missing value? With “Analyze with: Automatic” a mixed-effects model is fitted, which uses every value.',
     },
     'friedman': {
       name: 'Friedman test',
@@ -277,7 +277,7 @@ const Guidance = (function () {
       use: 'Test the effect of two categorical factors (and their interaction) on a continuous outcome — e.g. treatment × time, or genotype × infection.',
       assumptions: ['Independent observations', 'Approximately normal residuals', 'Roughly equal variances across cells', 'Ideally balanced (equal n per cell) — unbalanced uses Type III SS'],
       interpret: 'Look at the interaction first: if it is significant, the effect of one factor depends on the other, so interpret the main effects with care. Follow up with multiple comparisons (e.g. compare groups within each row).',
-      alt: 'One factor only? Use one-way ANOVA. Repeated measures on the same subjects need a matched/RM design.',
+      alt: 'One factor only? Use one-way ANOVA. The same subjects measured more than once? Tick the matching “Repeated measures” question in the options: repeated-measures ANOVA, or a mixed-effects model when values are missing.',
     },
     'srh': {
       name: 'Scheirer-Ray-Hare test',

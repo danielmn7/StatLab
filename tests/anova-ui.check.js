@@ -214,7 +214,7 @@ app.whenReady().then(async () => {
     && JSON.stringify(await options('#analyze-method')) === JSON.stringify(['tukey', 'holm-sidak', 'bonferroni', 'sidak', 'snk', 'lsd', 'fdr-bh', 'fdr-bky', 'fdr-by']));
   await go();
   s = await state();
-  ok('default repeated-measures spec', JSON.stringify(s.results[0].spec) === JSON.stringify({ kind: 'rm-anova', posthoc: 'tukey' }));
+  ok('default repeated-measures spec', JSON.stringify(s.results[0].spec) === JSON.stringify({ kind: 'rm-anova', posthoc: 'tukey', rmMethod: 'auto' }));
   text = await cardText();
   ok('repeated-measures card reports the Geisser-Greenhouse result', text.includes('P value (Geisser-Greenhouse)') && text.includes('Geisser-Greenhouse ε') && text.includes('Was the matching effective?') && text.includes('Individual (between rows)'));
   rows = await tableRows('.result-card table.stats:not(.posthoc) tbody tr');
@@ -230,16 +230,19 @@ app.whenReady().then(async () => {
   s = await state();
   const pooled = T.rmANOVA(rmCols, rmNames, { sphericity: true });
   const spherical = s.results.find((r) => r.spec.sphericity);
-  ok('assuming sphericity is a separate analysis', s.results.length === 2 && JSON.stringify(spherical.spec) === JSON.stringify({ kind: 'rm-anova', posthoc: 'dunnett', control: 0, sphericity: true }));
+  ok('assuming sphericity is a separate analysis', s.results.length === 2 && JSON.stringify(spherical.spec) === JSON.stringify({ kind: 'rm-anova', posthoc: 'dunnett', control: 0, rmMethod: 'auto', sphericity: true }));
   expected = T.rmPosthoc(pooled, 'dunnett', { control: 0 }).comparisons;
   const sphGraph = s.graphs.find((g) => g.resultId === spherical.id) || s.graphs[s.graphs.length - 1];
   ok('sphericity-assumed Dunnett uses the pooled residual', sphGraph.spec.opts.sig.length === 3 && sphGraph.spec.opts.sig.every((b, i) => close(b.p, expected[i].p)) && expected[0].df === 15);
   ok('its card says so', (await cardText()).includes('P value (sphericity assumed)'));
 
-  // A blank cell drops that subject everywhere and says so; rows are never shifted.
+  // With "Repeated-measures ANOVA always", a blank cell drops that subject everywhere
+  // and says so; rows are never shifted. (The default now fits a mixed-effects model
+  // instead: see rm-mixed-ui.check.js.)
   const gappy = RM.map((r) => r.slice()); gappy.splice(2, 0, ['', 99, 99, 99]);
   await fixture('column', rmNames, gappy);
   await openAnalysis('Repeated-measures ANOVA');
+  await choose('#analyze-rm-method', 'rm');
   await go();
   s = await state();
   text = await cardText();
@@ -247,6 +250,7 @@ app.whenReady().then(async () => {
   ok('the remaining rows stay matched', s.graphs[0].spec.opts.sig.every((b, i) => close(b.p, T.rmPosthoc(rm, 'tukey').comparisons[i].p)));
   await fixture('column', rmNames, [[1, 2, 3, 4], ['', 5, 6, 7]]);
   await openAnalysis('Repeated-measures ANOVA');
+  await choose('#analyze-rm-method', 'rm');
   await go();
   ok('too few matched rows is an explicit unavailable state', (await cardText()).includes('needs at least two rows with a value in every column') && !(await run(`!!document.querySelector('.result-card .verdict.sig')`)));
 
